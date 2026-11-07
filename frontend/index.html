@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Liner Notes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,900;1,9..144,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Landing / upload -->
+  <section id="landing" class="landing">
+    <div class="landing-inner">
+      <p class="kicker">Side A · Track 1</p>
+      <h1>Liner Notes</h1>
+      <p class="lede">The story of your listening: your eras, the artists you ghosted, the songs you skip but never delete.</p>
+
+      <form id="upload-form" class="card upload">
+        <label class="field">What should we call you?
+          <input name="name" placeholder="Listener" maxlength="80">
+        </label>
+        <label class="drop" id="drop">
+          <input type="file" name="files" id="files" multiple accept=".zip,.json" hidden>
+          <strong>Drop your Spotify export here</strong>
+          <span>the .zip, or the JSON files inside it</span>
+        </label>
+        <button class="btn primary" type="submit">Read my notes</button>
+        <p class="status" id="upload-status" role="status"></p>
+      </form>
+
+      <div class="row-links">
+        <button class="btn primary" id="resume-btn" type="button" hidden>Continue where you left off</button>
+        <button class="btn ghost" id="demo-btn" type="button">Try the demo listener</button>
+        <form id="key-form" class="inline">
+          <input id="key-input" placeholder="Already have a profile key?" aria-label="Profile key">
+          <button class="btn ghost" type="submit">Open</button>
+        </form>
+      </div>
+
+      <details class="howto">
+        <summary>How to get your Spotify export (no login needed)</summary>
+        <ol>
+          <li>Go to <a href="https://www.spotify.com/account/privacy/" target="_blank" rel="noopener">spotify.com → Account → Privacy settings</a>.</li>
+          <li>Tick <b>Account data</b> (arrives in a few days) and, for skips and your full history, <b>Extended streaming history</b> (can take up to 30 days).</li>
+          <li>Upload whichever arrives first. When the other one lands, upload it with your profile key and it merges.</li>
+        </ol>
+        <p class="muted">Why not "Log in with Spotify"? Spotify caps hobby apps at 5 users. Exports work for everyone.</p>
+      </details>
+      <p class="privacy">Your raw files are read in memory and never saved. You can delete everything with one click.</p>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="masthead">
+      <div>
+        <p class="kicker" id="who"></p>
+        <h1 class="mast-title">Liner Notes</h1>
+      </div>
+      <div class="filters" aria-label="Filters">
+        <label>From <select id="f-start"></select></label>
+        <label>To <select id="f-end"></select></label>
+        <label>Genre <select id="f-genre"><option value="">All</option></select></label>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="story" class="active">Story</button>
+      <button data-tab="top">Top</button>
+      <button data-tab="time">Over time</button>
+      <button data-tab="ghosts">Ghosts</button>
+      <button data-tab="decades">Decades &amp; genres</button>
+      <button data-tab="clock">Clock</button>
+      <button data-tab="love">Skips &amp; love</button>
+      <button data-tab="cleanup">Clean up</button>
+      <button data-tab="discover">Discover</button>
+      <button data-tab="compare">Compare</button>
+      <button data-tab="local">Local scene</button>
+      <button data-tab="settings">You</button>
+    </nav>
+
+    <main id="view" class="view"></main>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

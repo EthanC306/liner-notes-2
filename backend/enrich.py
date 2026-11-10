@@ -8,11 +8,12 @@ Results are cached in artist_info / track_info so each lookup happens once.
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from sqlalchemy import func, select
 
-from db import ArtistInfo, Play, SessionLocal, TrackInfo
+from db import ArtistInfo, ArtistTopTracks, Play, SessionLocal, TrackInfo
 
 LASTFM_KEY = os.getenv("LASTFM_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -55,9 +56,34 @@ def lookup_release_year(artist: str, track: str) -> int | None:
         time.sleep(1.1)  # MusicBrainz rate limit
 
 
-def artist_top_tracks(artist: str, limit: int = 5) -> list[str]:
-    data = _lastfm("artist.gettoptracks", artist=artist, limit=limit) or {}
-    return [t["name"] for t in data.get("toptracks", {}).get("track", [])]
+def _fetch_top_tracks(artist: str) -> list[str] | None:
+    """None means the request failed (don't cache); [] means Last.fm has nothing."""
+    data = _lastfm("artist.gettoptracks", artist=artist, limit=5)
+    if data is None or "toptracks" not in data:
+        return None
+    return [t["name"] for t in data["toptracks"].get("track", [])]
+
+
+def top_tracks_many(s, artists: list[str]) -> dict[str, list[str]]:
+    """Top tracks for many artists at once: one cache query, then any misses fetched in parallel and saved."""
+    artists = list(dict.fromkeys(a for a in artists if a))
+    if not artists:
+        return {}
+    out = {r.artist: [t for t in r.tracks.split("|") if t]
+           for r in s.scalars(select(ArtistTopTracks).where(ArtistTopTracks.artist.in_(artists)))}
+    misses = [a for a in artists if a not in out]
+    if misses and LASTFM_KEY:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for artist, tracks in zip(misses, pool.map(_fetch_top_tracks, misses)):
+                if tracks is not None:
+                    out[artist] = tracks
+                    s.merge(ArtistTopTracks(artist=artist, tracks="|".join(tracks)))
+        s.commit()
+    return {a: out.get(a, []) for a in artists}
+
+
+def artist_top_tracks(s, artist: str, limit: int = 5) -> list[str]:
+    return top_tracks_many(s, [artist])[artist][:limit]
 
 
 def enrich_profile(profile_id: int, max_tracks: int = 150):

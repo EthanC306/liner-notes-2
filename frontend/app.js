@@ -17,7 +17,19 @@ function toast(msg) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.hidden = true), 3200);
 }
 
-async function api(path, opts = {}) {
+// GET responses are cached per profile + URL (filters are in the URL), so revisiting a tab is instant.
+// Any write (upload, save, delete, tag) clears the cache, since it can change what the stats say.
+const cache = new Map();
+
+function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
+  if (method !== "GET") { cache.clear(); return fetchApi(path, opts); }
+  const k = `${key}|${path}`;
+  if (!cache.has(k)) cache.set(k, fetchApi(path, opts).catch((e) => { cache.delete(k); throw e; }));
+  return cache.get(k);
+}
+
+async function fetchApi(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (key) headers["X-Profile-Key"] = key;
   const res = await fetch(path, { ...opts, headers });
@@ -326,6 +338,50 @@ const VIEWS = {
     draw(await api("/api/local"));
   },
 
+  async mixtape(v) {
+    v.innerHTML = `<p class="kicker">Side B</p><h2>Rediscovery Mixtape</h2>
+      <p class="muted">Songs you loved, played to death and never skipped, then quietly stopped playing.</p>
+      <div class="toolbar mix-controls">
+        <label>Length <input type="range" id="mx-len" min="5" max="30" value="15"> <b id="mx-len-v">15</b></label>
+        <label>Gone at least <input type="range" id="mx-gone" min="1" max="24" value="6"> <b id="mx-gone-v">6</b> mo</label>
+        <label class="check"><input type="checkbox" id="mx-ai" checked> AI liner notes</label>
+      </div>
+      <div id="mx-out"><p class="muted">Rewinding…</p></div>
+      <section class="section" id="mx-saved"></section>`;
+    let tape = null;
+    const draw = async () => {
+      $("#mx-len-v").textContent = $("#mx-len").value; $("#mx-gone-v").textContent = $("#mx-gone").value;
+      $("#mx-out").innerHTML = '<p class="muted">Rewinding…</p>';
+      tape = await api(`/api/mixtape?length=${$("#mx-len").value}&months_gone=${$("#mx-gone").value}&ai=${$("#mx-ai").checked}`);
+      if (!tape.tracks.length) { $("#mx-out").innerHTML = empty("Nothing you loved has gone quiet that long. Try a shorter gap."); return; }
+      $("#mx-out").innerHTML = `${cassette(tape.title, tape.tracks, tape.ai ? "liner notes by AI" : "")}
+        <div class="toolbar"><button class="btn primary" id="mx-copy">Copy to Spotify</button>
+          <button class="btn" id="mx-save">Save &amp; get share link</button></div>
+        ${tape.fresh.length ? `<h3>Bonus: something new</h3><ul class="plain">${tape.fresh.map((f) =>
+          `<li><b>${esc(f.track)}</b> · ${esc(f.artist)} <span class="muted">(if you miss ${esc(f.because)})</span></li>`).join("")}</ul>` : ""}`;
+      $("#mx-copy").addEventListener("click", () => exportTracks(tape.tracks, "rediscovery-mixtape.txt"));
+      $("#mx-save").addEventListener("click", async () => {
+        const { slug } = await api("/api/mixtape", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: tape.title, tracks: tape.tracks }) });
+        const link = `${location.origin}/?mixtape=${slug}`;
+        try { await navigator.clipboard.writeText(link); toast("Saved! Share link copied."); } catch { toast(`Saved: ${link}`); }
+        drawSaved();
+      });
+    };
+    const drawSaved = async () => {
+      const list = await api("/api/mixtapes");
+      $("#mx-saved").innerHTML = list.length ? `<h3>Your saved tapes</h3><ul class="plain">${list.map((m) =>
+        `<li><a href="/?mixtape=${esc(m.slug)}" target="_blank">${esc(m.title)}</a> <span class="muted">${m.count} tracks · ${m.created}</span>
+         <button class="btn small" data-del="${esc(m.slug)}">delete</button></li>`).join("")}</ul>` : "";
+      v.querySelectorAll("#mx-saved [data-del]").forEach((b) => b.addEventListener("click", async () => {
+        await api(`/api/mixtape/${b.dataset.del}`, { method: "DELETE" }); drawSaved(); }));
+    };
+    $("#mx-len").addEventListener("input", () => ($("#mx-len-v").textContent = $("#mx-len").value));
+    $("#mx-gone").addEventListener("input", () => ($("#mx-gone-v").textContent = $("#mx-gone").value));
+    ["mx-len", "mx-gone", "mx-ai"].forEach((id) => $("#" + id).addEventListener("change", draw));
+    await Promise.all([draw(), drawSaved()]);
+  },
+
   async settings(v) {
     const me = await api("/api/me");
     v.innerHTML = `<h2>${esc(me.name)}</h2>
@@ -345,10 +401,31 @@ const VIEWS = {
   },
 };
 
+function cassette(title, tracks, tag) {
+  return `<article class="cassette"><header><span class="reel"></span><h3>${esc(title)}</h3><span class="reel"></span></header>
+    ${tag ? `<p class="kicker">${esc(tag)}</p>` : ""}
+    <ol class="tracklist">${tracks.map((t) => `<li><div><b>${esc(t.track)}</b> · ${esc(t.artist)}
+      <span class="badge">${esc(t.era)}</span></div><p class="note">${esc(t.note)}</p></li>`).join("")}</ol></article>`;
+}
+
+async function showShared(slug) {
+  $("#landing").hidden = true;
+  const v = $("#shared"); v.hidden = false;
+  try {
+    const m = await api(`/api/mixtape/${encodeURIComponent(slug)}`);
+    v.innerHTML = `<p class="kicker">A mixtape from ${esc(m.by)} · ${m.created}</p>${cassette(m.title, m.tracks, "")}
+      <div class="toolbar"><button class="btn primary" id="sh-copy">Copy to Spotify</button>
+      <a class="btn ghost" href="/">Make your own</a></div>`;
+    $("#sh-copy").addEventListener("click", () => exportTracks(m.tracks, "mixtape.txt"));
+  } catch (e) { v.innerHTML = empty(esc(e.message)) + '<a class="btn ghost" href="/">Liner Notes</a>'; }
+}
+
 // ---------- Boot ----------
 document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => { currentTab = b.dataset.tab; render(); }));
 ["f-start", "f-end", "f-genre"].forEach((id) => $("#" + id).addEventListener("change", render));
 initLanding();
+const sharedSlug = new URLSearchParams(location.search).get("mixtape");
+if (sharedSlug) showShared(sharedSlug);
 // Always open on the landing page; a saved profile is one click away.
 if (getKey()) {
   const resume = $("#resume-btn");

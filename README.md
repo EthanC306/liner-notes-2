@@ -16,6 +16,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cd backend && ../.venv/bin/uvicorn main:app --reload
 ```
 
+Or the short version: `make setup` once, then `make` (also `make test`, `make demo`).
+
 Open http://localhost:8000 and click **Try the demo listener**.
 
 ## Using real data
@@ -49,6 +51,13 @@ frontend/  index.html  styles.css  app.js (vanilla JS + Chart.js)
 scripts/   make_sample_export.py
 tests/     test_app.py  (run: .venv/bin/pytest)
 ```
+
+## Rediscovery Mixtape
+
+The **Mixtape** tab builds a tape of songs you loved but stopped playing, ordered as a walk through your
+eras with a liner note for each one. Use the sliders to set the length and how long a song has to be gone. **Save**
+gives you a public link (`/?mixtape=...`) that shows only the tracklist. **Copy to Spotify** works like the
+fix-it exports below.
 
 ## Fix-it actions
 

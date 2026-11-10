@@ -5,10 +5,12 @@ import os
 import subprocess
 import sys
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("OLLAMA_URL", "http://127.0.0.1:1")  # never hit a real LLM in tests
 ROOT = Path(__file__).resolve().parent.parent
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{ROOT / 'tests' / 'test.db'}")
 sys.path.insert(0, str(ROOT / "backend"))
@@ -80,3 +82,41 @@ def test_delete_everything(client):
     h = {"X-Profile-Key": client.post("/api/upload", files=files).json()["key"]}
     assert client.delete("/api/me", headers=h).json()["deleted"]
     assert client.get("/api/me", headers=h).status_code == 401
+
+
+def test_mixtape(client, keys):
+    h, friend = keys
+    m = client.get("/api/mixtape?length=10&months_gone=6&ai=false", headers=h).json()
+    tracks = m["tracks"]
+    assert 0 < len(tracks) <= 10 and not m["ai"]
+    assert all(t["days_gone"] >= 180 and t["skip_rate"] <= 0.3 and t["note"] for t in tracks)
+    assert max(Counter(t["artist"] for t in tracks).values()) <= 2  # one artist can't take over
+    assert [t["peak_month"] for t in tracks] == sorted(t["peak_month"] for t in tracks)  # walk through time
+
+    # Save, share publicly, and only the owner can delete.
+    slug = client.post("/api/mixtape", headers=h, json={"title": "Side B", "tracks": tracks}).json()["slug"]
+    shared = client.get(f"/api/mixtape/{slug}").json()  # no key needed
+    assert shared["title"] == "Side B" and shared["tracks"][0]["track"] == tracks[0]["track"]
+    assert set(shared["tracks"][0]) == {"track", "artist", "uri", "era", "note"}  # nothing else leaks
+    assert any(x["slug"] == slug for x in client.get("/api/mixtapes", headers=h).json())
+    client.delete(f"/api/mixtape/{slug}", headers={"X-Profile-Key": friend})
+    assert client.get(f"/api/mixtape/{slug}").status_code == 200
+    client.delete(f"/api/mixtape/{slug}", headers=h)
+    assert client.get(f"/api/mixtape/{slug}").status_code == 404
+    assert client.post("/api/mixtape", headers=h, json={"title": "x", "tracks": []}).status_code == 400
+
+
+def test_mixtape_ai_cannot_invent(monkeypatch):
+    import enrich, recommend
+    from db import SessionLocal, Profile
+    from sqlalchemy import select
+    monkeypatch.setattr(enrich, "ollama_json", lambda prompt: {
+        "title": "Ghosts of 2022", "order": [{"index": 1, "note": "the good one"}, {"index": 99, "note": "fake"},
+                                            {"index": "0", "note": "bad type"}]})
+    with SessionLocal() as s:
+        pid = s.scalar(select(Profile.id).where(Profile.name == "Demo Listener"))
+        base = recommend.mixtape(s, pid, 8, 6, use_ai=False)["tracks"]
+        m = recommend.mixtape(s, pid, 8, 6, use_ai=True)
+    assert m["ai"] and m["title"] == "Ghosts of 2022"
+    assert m["tracks"][0]["track"] == base[1]["track"] and m["tracks"][0]["note"] == "the good one"
+    assert sorted(t["track"] for t in m["tracks"]) == sorted(t["track"] for t in base)  # same set, nothing invented

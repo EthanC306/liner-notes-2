@@ -1,4 +1,5 @@
 """Liner Notes API. Run: uvicorn main:app --reload  (from backend/)."""
+import json
 import secrets
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 import enrich
 import recommend
 import stats
-from db import LocalTag, Play, PlaylistTrack, Profile, SessionLocal, engine, init_db
+from db import LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, engine, init_db
 from parser import parse_export
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -102,7 +103,7 @@ def me(p=Depends(profile)):
 
 @app.delete("/api/me")
 def delete_me(p=Depends(profile), s=Depends(db)):
-    for model in (Play, PlaylistTrack, LocalTag):
+    for model in (Play, PlaylistTrack, LocalTag, Mixtape):
         s.execute(delete(model).where(model.profile_id == p.id))
     s.execute(delete(Profile).where(Profile.id == p.id))
     s.commit()
@@ -169,6 +170,56 @@ def compare(friend_key: str, p=Depends(profile), s=Depends(db)):
     if not friend:
         raise HTTPException(404, "No profile with that key")
     return {"a": p.name, "b": friend.name, **stats.compare(s, p.id, friend.id)}
+
+
+@app.get("/api/mixtape")
+def mixtape(length: int = 15, months_gone: int = 6, ai: bool = True, p=Depends(profile), s=Depends(db)):
+    return recommend.mixtape(s, p.id, max(5, min(length, 40)), max(1, min(months_gone, 36)), ai)
+
+
+class MixtapeIn(BaseModel):
+    title: str
+    tracks: list[dict]
+
+
+MIXTAPE_FIELDS = ("track", "artist", "uri", "era", "note")
+
+
+@app.post("/api/mixtape")
+def mixtape_save(body: MixtapeIn, p=Depends(profile), s=Depends(db)):
+    if not body.tracks:
+        raise HTTPException(400, "Empty mixtape")
+    tracks = [{k: str(t.get(k) or "")[:300] for k in MIXTAPE_FIELDS} for t in body.tracks[:40]]
+    m = Mixtape(profile_id=p.id, slug=secrets.token_urlsafe(9), title=body.title.strip()[:120] or "Rediscovery",
+                tracks=json.dumps(tracks))
+    s.add(m)
+    s.commit()
+    return {"slug": m.slug}
+
+
+@app.get("/api/mixtapes")
+def mixtape_list(p=Depends(profile), s=Depends(db)):
+    rows = s.scalars(select(Mixtape).where(Mixtape.profile_id == p.id).order_by(Mixtape.created_at.desc()))
+    return [{"slug": m.slug, "title": m.title, "count": len(json.loads(m.tracks)),
+             "created": m.created_at.date().isoformat()} for m in rows]
+
+
+@app.get("/api/mixtape/{slug}")
+def mixtape_shared(slug: str, s=Depends(db)):
+    """Public: anyone with the link sees the tracklist, but nothing else about the owner's history."""
+    m = s.scalar(select(Mixtape).where(Mixtape.slug == slug))
+    if not m:
+        raise HTTPException(404, "No mixtape at that link")
+    owner = s.get(Profile, m.profile_id)
+    return {"title": m.title, "by": owner.name if owner else "", "tracks": json.loads(m.tracks),
+            "created": m.created_at.date().isoformat()}
+
+
+@app.delete("/api/mixtape/{slug}")
+def mixtape_delete(slug: str, p=Depends(profile), s=Depends(db)):
+    s.execute(delete(Mixtape).where(Mixtape.slug == slug, Mixtape.profile_id == p.id))
+    s.commit()
+    return {"deleted": True}
 
 
 class LocalIn(BaseModel):

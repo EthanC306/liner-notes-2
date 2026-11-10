@@ -287,3 +287,56 @@ def local_scene(s, pid):
     counts = dict(s.execute(select(Play.artist, func.count()).where(
         Play.profile_id == pid, Play.artist.in_([t[1] for t in tags])).group_by(Play.artist)).all())
     return [{"id": i, "artist": a, "city": c, "plays": counts.get(a, 0)} for i, a, c in tags]
+
+
+def _era_label(month: str) -> str:
+    return f"{'early' if month[5:7] <= '06' else 'late'} {month[:4]}"
+
+
+def rediscoveries(s, pid, months_gone=6, min_plays=5, per_artist=2, limit=40):
+    """Tracks you loved (played a lot, rarely skipped) but haven't played in `months_gone` months.
+
+    Each comes with the era it peaked in, so the mixtape can tell the story of when it mattered.
+    """
+    end = last_played(s, pid)
+    if not end:
+        return []
+    cutoff = end - timedelta(days=30 * months_gone)
+    rows = s.execute(select(Play.track, Play.artist, Play.month, func.count(), func.sum(skip_expr),
+                            func.max(Play.played_at), func.max(Play.uri))
+                     .where(Play.profile_id == pid).group_by(Play.track, Play.artist, Play.month)).all()
+    tracks = {}
+    for t, a, month, n, sk, last, uri in rows:
+        r = tracks.setdefault((t, a), {"track": t, "artist": a, "plays": 0, "skips": 0, "last": last,
+                                       "uri": uri, "peak": (0, month)})
+        r["plays"] += n
+        r["skips"] += sk or 0
+        r["last"] = max(r["last"], last)
+        r["uri"] = r["uri"] or uri
+        r["peak"] = max(r["peak"], (n, month))
+    genres = _artist_genres(s, {a for _, a in tracks})
+    picks = []
+    for r in tracks.values():
+        if r["last"] >= cutoff or r["plays"] < min_plays:
+            continue
+        skip_rate = r["skips"] / r["plays"]
+        if skip_rate > 0.3:
+            continue
+        # Love = plays you actually finished; a bit of weight for how long you've missed it.
+        days_gone = (end - r["last"]).days
+        score = r["plays"] * (1 - skip_rate) * (1 + min(days_gone, 730) / 730)
+        peak_month = r["peak"][1]
+        picks.append({"track": r["track"], "artist": r["artist"], "uri": r["uri"], "plays": r["plays"],
+                      "skip_rate": round(skip_rate, 2), "days_gone": days_gone,
+                      "last_played": r["last"].date().isoformat(), "peak_month": peak_month,
+                      "era": _era_label(peak_month), "genre": (genres.get(r["artist"]) or [None])[0],
+                      "score": round(score, 1)})
+    picks.sort(key=lambda p: -p["score"])
+    out, per = [], Counter()
+    for p in picks:  # cap per artist so one ghost doesn't take over the tape
+        if per[p["artist"]] < per_artist:
+            per[p["artist"]] += 1
+            out.append(p)
+        if len(out) >= limit:
+            break
+    return out

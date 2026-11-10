@@ -33,9 +33,9 @@ def candidates(s, pid, n=15):
 
 def recommend(s, pid, use_ai=True):
     cands = candidates(s, pid)
+    tops = enrich.top_tracks_many(s, [c["artist"] for c in cands])
     for c in cands:
-        tops = enrich.artist_top_tracks(c["artist"], 3)
-        c["tracks"] = tops
+        c["tracks"] = tops[c["artist"]][:3]
         c["why"] = f"Fans of {' and '.join(c['because'][:2])} play them a lot."
     if not cands or not use_ai:
         return {"items": cands, "ai": False}
@@ -91,3 +91,68 @@ def summary(s, pid):
         f"{facts['hours']:,} hours of music, {facts['span']}. "
         f"The constant: {', '.join(facts['top_artists'][:3])}. "
         f"Your eras went {eras_txt}.{ghost_txt}")}
+
+
+def _template_note(t):
+    months = max(1, round(t["days_gone"] / 30))
+    flavor = f"{t['genre']} " if t["genre"] else ""
+    return (f"From your {t['era']} {flavor}era: {t['plays']} plays and you almost never skipped it. "
+            f"Last heard {months} month{'s' if months != 1 else ''} ago.")
+
+
+def mixtape(s, pid, length=15, months_gone=6, use_ai=True, fresh=3):
+    """A Rediscovery Mixtape: forgotten favourites in story order, each with a liner note.
+
+    Like `recommend`, the LLM may only reorder and annotate the fixed candidate list; anything else is dropped.
+    """
+    tracks = stats.rediscoveries(s, pid, months_gone, limit=length)
+    tracks.sort(key=lambda t: t["peak_month"])  # default order: oldest era first, a walk through time
+    for t in tracks:
+        t["note"] = _template_note(t)
+    result = {"title": f"Rediscovery, {len(tracks)} tracks", "tracks": tracks, "ai": False,
+              "fresh": _fresh_picks(s, pid, tracks, fresh)}
+    if not tracks or not use_ai:
+        return result
+
+    listing = "\n".join(f"{i}. \"{t['track']}\" by {t['artist']} (peaked {t['era']}, {t['plays']} plays, "
+                        f"last played {t['days_gone']} days ago)" for i, t in enumerate(tracks))
+    out = enrich.ollama_json(
+        "You are making a mixtape of songs this listener loved but forgot. Use ONLY these tracks, by number:\n"
+        f"{listing}\n\nOrder ALL of them so the tape flows well, and write a short, warm liner note (max 20 words) "
+        "for each using only the facts given. Also give the tape a short title. Reply as JSON: "
+        '{"title": "<title>", "order": [{"index": <number>, "note": "<note>"}]}')
+    order = out.get("order") if isinstance(out, dict) else None
+    if not isinstance(order, list):
+        return result
+    ranked, seen = [], set()
+    for o in order:
+        i = o.get("index") if isinstance(o, dict) else None
+        if isinstance(i, int) and 0 <= i < len(tracks) and i not in seen:  # reject anything invented
+            seen.add(i)
+            ranked.append({**tracks[i], "note": str(o.get("note") or tracks[i]["note"])[:200]})
+    if not seen:
+        return result
+    ranked += [t for i, t in enumerate(tracks) if i not in seen]
+    title = out.get("title")
+    return {**result, "tracks": ranked, "ai": True,
+            "title": str(title)[:120] if isinstance(title, str) and title.strip() else result["title"]}
+
+
+def _fresh_picks(s, pid, tracks, n):
+    """A few new songs from artists similar to the ones on the tape (needs Last.fm; empty otherwise)."""
+    if not n:
+        return []
+    known = {a.lower() for (a,) in s.execute(select(Play.artist).where(Play.profile_id == pid).distinct())}
+    infos = {i.artist: i for i in s.scalars(select(ArtistInfo).where(ArtistInfo.artist.in_({t["artist"] for t in tracks})))}
+    picks, used = [], set()  # (similar artist, the tape artist it's similar to)
+    for t in tracks:
+        info = infos.get(t["artist"])
+        for cand in (info.similar.split("|") if info and info.similar else [])[:5]:
+            if cand and cand.lower() not in known and cand not in used:
+                used.add(cand)
+                picks.append((cand, t["artist"]))
+                break
+        if len(picks) >= n * 2:  # a few spares in case Last.fm has nothing for some
+            break
+    tops = enrich.top_tracks_many(s, [c for c, _ in picks])
+    return [{"track": tops[c][0], "artist": c, "because": b} for c, b in picks if tops[c]][:n]

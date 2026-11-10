@@ -64,6 +64,13 @@ class ArtistInfo(Base):
     looked_up = Column(Boolean, default=False)
 
 
+class ArtistTopTracks(Base):
+    """Shared cache of Last.fm top tracks, so recommendations don't re-ask Last.fm on every page load."""
+    __tablename__ = "artist_top_tracks"
+    artist = Column(String(300), primary_key=True)
+    tracks = Column(Text, default="")  # "|"-separated, best first; "" = Last.fm has none
+
+
 class TrackInfo(Base):
     __tablename__ = "track_info"
     key = Column(String(620), primary_key=True)  # "artist\ttrack"
@@ -77,6 +84,17 @@ class LocalTag(Base):
     profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
     artist = Column(String(300), nullable=False)
     city = Column(String(120), nullable=False)
+
+
+class Mixtape(Base):
+    """A saved Rediscovery Mixtape. `slug` is a public share link; it reveals only the tracklist."""
+    __tablename__ = "mixtapes"
+    id = Column(Integer, primary_key=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    slug = Column(String(32), unique=True, nullable=False, index=True)
+    title = Column(String(120), nullable=False)
+    tracks = Column(Text, nullable=False)  # JSON list of {track, artist, uri, era, note}
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 def init_db():

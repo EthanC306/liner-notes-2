@@ -131,3 +131,21 @@ td.rank { font-family: var(--mono); color: var(--ink-2); width: 2.5rem; }
   .eras li .badge { grid-column: 2; justify-self: start; }
   .chart-box { height: 280px; }
 }
+
+/* Rediscovery Mixtape */
+.mix-controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.mix-controls label { display: flex; align-items: center; gap: 8px; font-size: .78rem; }
+.mix-controls input[type=range] { width: 140px; accent-color: var(--accent); }
+.cassette { max-width: 720px; border: 2px solid var(--ink); border-radius: 10px; background: var(--paper-2);
+  padding: 18px 22px; margin: 18px 0; }
+.cassette header { display: flex; align-items: center; gap: 14px; border-bottom: 2px dashed var(--rule);
+  padding-bottom: 12px; margin-bottom: 8px; }
+.cassette header h3 { flex: 1; text-align: center; margin: 0; font-size: 1.5rem; font-style: italic; }
+.reel { width: 34px; height: 34px; border-radius: 50%; border: 6px double var(--accent); flex: none; }
+.tracklist { margin: 0; padding-left: 1.6em; }
+.tracklist li { padding: 10px 0; border-bottom: 1px solid var(--rule); font-family: var(--mono); color: var(--accent); }
+.tracklist li > * { color: var(--ink); font-family: var(--serif); }
+.tracklist .note { margin: 4px 0 0; font-style: italic; color: var(--ink-2); font-size: .92rem; }
+.plain { list-style: none; padding: 0; }
+.plain li { padding: 6px 0; }
+.shared { margin: 0 auto; }

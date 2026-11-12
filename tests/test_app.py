@@ -120,3 +120,32 @@ def test_mixtape_ai_cannot_invent(monkeypatch):
     assert m["ai"] and m["title"] == "Ghosts of 2022"
     assert m["tracks"][0]["track"] == base[1]["track"] and m["tracks"][0]["note"] == "the good one"
     assert sorted(t["track"] for t in m["tracks"]) == sorted(t["track"] for t in base)  # same set, nothing invented
+
+
+def test_accounts_signup_login_and_reset(client, capsys):
+    import re
+    r = client.post("/api/auth/signup", json={"email": "Ann@Example.com", "password": "short", "name": "Ann"})
+    assert r.status_code == 400
+    r = client.post("/api/auth/signup", json={"email": "Ann@Example.com", "password": "hunter2hunter2", "name": "Ann"})
+    assert r.status_code == 200
+    key = r.json()["key"]
+    assert client.get("/api/me", headers={"X-Profile-Key": key}).json()["email"] == "ann@example.com"
+    assert client.post("/api/auth/signup", json={"email": "ann@example.com", "password": "another-pass"}).status_code == 409
+
+    assert client.post("/api/auth/login", json={"email": "ann@example.com", "password": "wrong-pass"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": " ANN@example.com", "password": "hunter2hunter2"}).json()["key"] == key
+
+    # Forgot password: same reply for unknown emails; the link goes to the server log.
+    capsys.readouterr()
+    assert client.post("/api/auth/forgot", json={"email": "nobody@example.com"}).json() == {"ok": True}
+    assert client.post("/api/auth/forgot", json={"email": "ann@example.com"}).json() == {"ok": True}
+    token = re.search(r"\?reset=(\S+)", capsys.readouterr().out).group(1)
+    assert client.post("/api/auth/reset", json={"token": "bogus", "password": "new-password-1"}).status_code == 400
+    assert client.post("/api/auth/reset", json={"token": token, "password": "new-password-1"}).json()["key"] == key
+    assert client.post("/api/auth/reset", json={"token": token, "password": "new-password-2"}).status_code == 400  # one use
+    assert client.post("/api/auth/login", json={"email": "ann@example.com", "password": "hunter2hunter2"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "ann@example.com", "password": "new-password-1"}).status_code == 200
+
+    # Deleting the profile deletes the account too.
+    client.delete("/api/me", headers={"X-Profile-Key": key})
+    assert client.post("/api/auth/login", json={"email": "ann@example.com", "password": "new-password-1"}).status_code == 401

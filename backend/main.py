@@ -11,10 +11,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+import auth
 import enrich
 import recommend
 import stats
-from db import LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, engine, init_db
+from db import Account, LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, engine, init_db
 from parser import parse_export
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +23,17 @@ FRONTEND = ROOT / "frontend"
 MAX_UPLOAD = 200 * 1024 * 1024
 
 app = FastAPI(title="Liner Notes")
+app.include_router(auth.router)
 init_db()
+
+
+@app.middleware("http")
+async def revalidate_frontend(request, call_next):
+    """Make browsers re-check the HTML/CSS/JS each load (cheap 304 via ETag), so edits show up without a hard refresh."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 def db():
@@ -97,13 +108,14 @@ def demo(background: BackgroundTasks, s=Depends(db)):
 
 
 @app.get("/api/me")
-def me(p=Depends(profile)):
-    return {"name": p.name, "extended": p.has_extended}
+def me(p=Depends(profile), s=Depends(db)):
+    a = s.scalar(select(Account).where(Account.profile_id == p.id))
+    return {"name": p.name, "extended": p.has_extended, "email": a.email if a else None}
 
 
 @app.delete("/api/me")
 def delete_me(p=Depends(profile), s=Depends(db)):
-    for model in (Play, PlaylistTrack, LocalTag, Mixtape):
+    for model in (Account, Play, PlaylistTrack, LocalTag, Mixtape):
         s.execute(delete(model).where(model.profile_id == p.id))
     s.execute(delete(Profile).where(Profile.id == p.id))
     s.commit()

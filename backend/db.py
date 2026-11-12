@@ -25,6 +25,18 @@ class Profile(Base):
     has_extended = Column(Boolean, default=False)  # extended history has skips
 
 
+class Account(Base):
+    """Email + password login for a profile. Email is not verified yet."""
+    __tablename__ = "accounts"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(254), unique=True, nullable=False, index=True)  # stored lowercased
+    password_hash = Column(String(255), nullable=False)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    reset_token_hash = Column(String(64))  # sha256 of the one-time reset token; the raw token is never stored
+    reset_expires = Column(DateTime)
+
+
 class Play(Base):
     __tablename__ = "plays"
     id = Column(Integer, primary_key=True)

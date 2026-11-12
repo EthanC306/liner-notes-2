@@ -63,56 +63,227 @@ function chart(canvas, config) {
 }
 
 // ---------- Upload / landing ----------
+const status = (msg) => ($("#landing-status").textContent = msg);
+
+// Used by the import page and "Add more data" on the You tab.
 async function upload(files, name) {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   fd.append("name", name || "Listener");
-  $("#upload-status").textContent = "Reading your history…";
+  toast("Reading your history…");
+  const st = $("#upload-status"); if (st) st.textContent = "Reading your history…";
   try {
     const r = await api("/api/upload", { method: "POST", body: fd });
     setKey(r.key);
     toast(`Read ${fmt(r.plays_parsed)} plays and ${fmt(r.playlist_tracks)} playlist tracks.`);
+    if (st) st.textContent = "";
     start();
-  } catch (e) {
-    $("#upload-status").textContent = e.message;
+  } catch (e) { toast(e.message); if (st) st.textContent = e.message; }
+}
+
+const DEMO_STORE = "linernotes.demo";
+
+async function openDemo() {
+  // Reuse the demo profile from last time if it still exists, so going back and forth is instant.
+  let demoKey = null;
+  try { demoKey = localStorage.getItem(DEMO_STORE); } catch {}
+  if (demoKey) {
+    setKey(demoKey);
+    try { await api("/api/me"); return start(); } catch { setKey(null); }
   }
+  status("Loading the demo listener…");
+  try {
+    const r = await api("/api/demo", { method: "POST" });
+    setKey(r.key);
+    try {
+      localStorage.setItem(DEMO_STORE, r.key);
+      if (r.friend_key) localStorage.setItem("linernotes.friend", r.friend_key);
+    } catch {}
+    status("");
+    start();
+  } catch (e) { status(e.message); }
 }
 
 function initLanding() {
+  $("#demo-btn").addEventListener("click", openDemo);
+  $("#back-btn").addEventListener("click", () => history.back());
+  // Account buttons: the landing corner, the demo's Sign up, and the logged-in corner.
+  $("#login-btn").addEventListener("click", () => openAuth("login"));
+  $("#landing-signup-btn").addEventListener("click", () => openAuth("signup"));
+  $("#signup-btn").addEventListener("click", () => openAuth("signup"));
+  $("#open-notes-btn").addEventListener("click", () => start());
+  $("#logout-btn").addEventListener("click", logout);
+  initAuth();
+  initImport();
+}
+
+function showLanding() {
+  $("#app").hidden = true; $("#landing").hidden = false;
+  refreshCorner();
+}
+
+// ---------- Accounts ----------
+// Logging in returns the profile key, which is what every other request already uses.
+const ACCOUNT_STORE = "linernotes.account";
+const AUTH_MODES = {
+  signup: { title: "Create your account", submit: "Sign up", path: "/api/auth/signup", pw: "Password", ac: "new-password" },
+  login: { title: "Log in", submit: "Log in", path: "/api/auth/login", pw: "Password", ac: "current-password" },
+  forgot: { title: "Forgot your password?", submit: "Send reset link", path: "/api/auth/forgot" },
+  reset: { title: "Choose a new password", submit: "Save password", path: "/api/auth/reset", pw: "New password", ac: "new-password" },
+};
+let authMode = "signup";
+let resetToken = null;
+
+function accountEmail() { try { return localStorage.getItem(ACCOUNT_STORE); } catch { return null; } }
+function setAccount(email) { try { email ? localStorage.setItem(ACCOUNT_STORE, email) : localStorage.removeItem(ACCOUNT_STORE); } catch {} }
+
+function refreshCorner() {
+  const signedIn = !!(key && accountEmail());
+  $("#corner-account").hidden = !signedIn;
+  $(".corner-auth:not(#corner-account)").hidden = signedIn;
+  $("#home-public").hidden = signedIn;
+  $("#home-import").hidden = !signedIn;
+  if (signedIn) $("#import-who").textContent = `Logged in as ${accountEmail()}`;
+}
+
+// Import page drop zone (logged in only).
+function initImport() {
   const drop = $("#drop"), input = $("#files");
   let picked = [];
-  input.addEventListener("change", () => { picked = [...input.files]; drop.querySelector("strong").textContent = `${picked.length} file(s) ready`; });
+  const ready = () => (drop.querySelector("strong").textContent = `${picked.length} file(s) ready`);
+  input.addEventListener("change", () => { picked = [...input.files]; ready(); });
   ["dragover", "dragenter"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, () => drop.classList.remove("over")));
-  drop.addEventListener("drop", (ev) => { ev.preventDefault(); picked = [...ev.dataTransfer.files]; drop.querySelector("strong").textContent = `${picked.length} file(s) ready`; });
+  drop.addEventListener("drop", (ev) => { ev.preventDefault(); picked = [...ev.dataTransfer.files]; ready(); });
   $("#upload-form").addEventListener("submit", (ev) => {
     ev.preventDefault();
     if (!picked.length) { $("#upload-status").textContent = "Pick your export first."; return; }
-    upload(picked, ev.target.name.value);
-  });
-  $("#key-form").addEventListener("submit", (ev) => { ev.preventDefault(); setKey($("#key-input").value.trim()); start(); });
-  $("#demo-btn").addEventListener("click", async () => {
-    $("#upload-status").textContent = "Loading the demo listener…";
-    try {
-      const r = await api("/api/demo", { method: "POST" });
-      setKey(r.key);
-      if (r.friend_key) try { localStorage.setItem("linernotes.friend", r.friend_key); } catch {}
-      start();
-    }
-    catch (e) { $("#upload-status").textContent = e.message; }
+    upload(picked);
   });
 }
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const m = AUTH_MODES[mode];
+  $("#auth-title").textContent = m.title;
+  $("#auth-submit").textContent = m.submit;
+  $("#auth-error").textContent = "";
+  $("#auth-submit").disabled = false;
+  if (m.pw) { $("#pw-label").textContent = m.pw; $("#auth-form").password.autocomplete = m.ac; }
+  document.querySelectorAll("#auth .pw-eye").forEach((b) => {
+    b.previousElementSibling.type = "password"; b.setAttribute("aria-pressed", "false"); b.setAttribute("aria-label", "Show password");
+  });
+  // Show only the fields and links that belong to this mode; hidden inputs are also skipped by validation.
+  document.querySelectorAll("#auth [data-for]").forEach((el) => {
+    const on = el.dataset.for.split(" ").includes(mode);
+    el.hidden = !on;
+    el.querySelectorAll("input").forEach((i) => (i.disabled = !on));
+  });
+}
+
+function openAuth(mode) {
+  setAuthMode(mode);
+  const d = $("#auth");
+  if (!d.open) d.showModal();
+  d.querySelector("input:not([disabled])")?.focus();
+}
+
+async function submitAuth(e) {
+  e.preventDefault();
+  const form = $("#auth-form");
+  if (!form.reportValidity()) return;
+  const body = Object.fromEntries(new FormData(form));
+  if (authMode === "signup" || authMode === "reset") {
+    if (body.password !== body.confirm) {
+      $("#auth-error").textContent = "Passwords don't match.";
+      form.confirm.focus();
+      return;
+    }
+    delete body.confirm;
+  }
+  if (authMode === "reset") body.token = resetToken;
+  $("#auth-submit").disabled = true; $("#auth-error").textContent = "";
+  try {
+    const r = await api(AUTH_MODES[authMode].path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (authMode === "forgot") {
+      $("#auth-form").hidden = true;
+      $("#auth-error").textContent = "";
+      $("#auth-title").textContent = "Check for your reset link";
+      $(".auth-links").insertAdjacentHTML("beforebegin", '<p class="auth-sent muted">If an account exists for that email, a reset link has been created. It works for one hour.</p>');
+      return;
+    }
+    setKey(r.key); setAccount(r.email);
+    if (authMode === "reset") history.replaceState(null, "", location.pathname);
+    $("#auth").close(); form.reset();
+    toast(authMode === "signup" ? `Welcome, ${r.name}!` : authMode === "reset" ? "Password updated." : `Welcome back, ${r.name}.`);
+    showLanding();  // logged-in home = import page
+  } catch (err) {
+    $("#auth-error").textContent = err.message;
+    $("#auth-submit").disabled = false;
+  }
+}
+
+function initAuth() {
+  $("#auth-form").addEventListener("submit", submitAuth);
+  // Eye buttons show or hide the password next to them.
+  document.querySelectorAll("#auth .pw-eye").forEach((b) => b.addEventListener("click", () => {
+    const input = b.previousElementSibling, show = input.type === "password";
+    input.type = show ? "text" : "password";
+    b.setAttribute("aria-pressed", show); b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  }));
+  // Live match check on the confirm field.
+  const checkMatch = () => {
+    const f = $("#auth-form"), mismatch = f.confirm.value && f.confirm.value !== f.password.value;
+    f.confirm.classList.toggle("mismatch", !!mismatch);
+    f.confirm.setCustomValidity(mismatch ? "Passwords don't match." : "");
+  };
+  $("#auth-form").password.addEventListener("input", checkMatch);
+  $("#auth-form").confirm.addEventListener("input", checkMatch);
+  $("#auth-close").addEventListener("click", () => $("#auth").close());
+  $("#auth").addEventListener("close", () => {
+    $("#auth-form").hidden = false; document.querySelectorAll(".auth-sent").forEach((el) => el.remove());
+  });
+  document.querySelectorAll("#auth [data-mode]").forEach((a) => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    $("#auth-form").hidden = false; document.querySelectorAll(".auth-sent").forEach((el) => el.remove());
+    setAuthMode(a.dataset.mode);
+    $("#auth").querySelector("input:not([disabled])")?.focus();
+  }));
+  // Reset links look like /?reset=<token>
+  resetToken = new URLSearchParams(location.search).get("reset");
+  if (resetToken) openAuth("reset");
+  // Keep an account's key across visits; a leftover demo key is dropped as before.
+  if (accountEmail()) key = getKey();
+  refreshCorner();
+}
+
+function logout() {
+  setKey(null); setAccount(null); cache.clear();
+  showLanding();
+  if (history.state?.app) history.replaceState(null, "", location.pathname);
+  toast("Logged out.");
+}
+
+// The browser's back button works too: entering the app adds a history entry, going back shows the landing page.
+window.addEventListener("popstate", () => { if (!history.state?.app) showLanding(); });
 
 // ---------- App shell ----------
 async function start() {
   let me;
   try { me = await api("/api/me"); } catch { setKey(null); $("#landing").hidden = false; $("#app").hidden = true; return; }
   $("#landing").hidden = true; $("#app").hidden = false;
+  if (!history.state?.app) history.pushState({ app: true }, "", location.pathname);
+  let demoKey = null;
+  try { demoKey = localStorage.getItem(DEMO_STORE); } catch {}
+  $("#signup-btn").hidden = !demoKey || demoKey !== key;
   $("#who").textContent = `The listening history of ${me.name}`;
   const ov = await api("/api/stats/overview");
   const opts = ['<option value="">Any</option>', ...ov.years.map((y) => `<option>${y}</option>`)].join("");
   $("#f-start").innerHTML = opts; $("#f-end").innerHTML = opts;
   $("#f-genre").innerHTML = '<option value="">All</option>' + ov.genres.map((g) => `<option>${esc(g)}</option>`).join("");
+  if (!ov.plays) currentTab = "settings";  // new account with no data yet: go straight to the upload step
   render();
 }
 
@@ -385,18 +556,19 @@ const VIEWS = {
   async settings(v) {
     const me = await api("/api/me");
     v.innerHTML = `<h2>${esc(me.name)}</h2>
+      ${me.email ? `<p class="muted">Logged in as ${esc(me.email)}</p>` : ""}
       <section class="section"><h3>Your profile key</h3><p class="muted">This is your login. Keep it to come back, share it with a friend to compare, or use it to add more data.</p>
         <div class="keybox">${esc(key)}</div></section>
       <section class="section"><h3>Add more data</h3><p class="muted">${me.extended ? "Extended history loaded, so skips are exact." : "Only basic history so far, so skips are estimated (plays under 30s). Upload your extended history when it arrives."}
         Duplicates are merged automatically.</p>
         <input type="file" id="more" multiple accept=".zip,.json"> <button class="btn" id="more-btn">Upload</button></section>
       <section class="section"><h3>Privacy</h3><p class="muted">Raw files were never stored. This deletes every play, playlist and tag tied to this key.</p>
-        <button class="btn danger" id="del">Delete everything</button> <button class="btn ghost" id="out">Sign out</button></section>`;
+        <button class="btn danger" id="del">Delete everything</button> <button class="btn ghost" id="out">Log out</button></section>`;
     $("#more-btn").addEventListener("click", () => { const f = $("#more").files; if (f.length) upload(f, me.name); });
-    $("#out").addEventListener("click", () => { setKey(null); location.reload(); });
+    $("#out").addEventListener("click", logout);
     $("#del").addEventListener("click", async () => {
       if (!confirm("Delete all of your data permanently?")) return;
-      await api("/api/me", { method: "DELETE" }); setKey(null); location.reload();
+      await api("/api/me", { method: "DELETE" }); setKey(null); setAccount(null); location.reload();
     });
   },
 };
@@ -426,9 +598,5 @@ document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("cli
 initLanding();
 const sharedSlug = new URLSearchParams(location.search).get("mixtape");
 if (sharedSlug) showShared(sharedSlug);
-// Always open on the landing page; a saved profile is one click away.
-if (getKey()) {
-  const resume = $("#resume-btn");
-  resume.hidden = false;
-  resume.addEventListener("click", () => { key = getKey(); start(); });
-}
+// Always open on the landing page.
+if (history.state?.app) history.replaceState(null, "", location.pathname + location.search);

@@ -6,7 +6,7 @@ const KEY_STORE = "linernotes.key";
 
 let key = null;
 let charts = [];
-let currentTab = "story";
+let currentTab = "top";
 
 function getKey() { try { return localStorage.getItem(KEY_STORE); } catch { return null; } }
 function setKey(k) { key = k; try { k ? localStorage.setItem(KEY_STORE, k) : localStorage.removeItem(KEY_STORE); } catch {} }
@@ -292,7 +292,7 @@ function render() {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab));
   const view = $("#view");
   view.innerHTML = '<p class="muted">Loading…</p>';
-  (VIEWS[currentTab] || VIEWS.story)(view).catch((e) => (view.innerHTML = `<div class="empty">${esc(e.message)}</div>`));
+  (VIEWS[currentTab] || VIEWS.top)(view).catch((e) => (view.innerHTML = `<div class="empty">${esc(e.message)}</div>`));
 }
 
 // ---------- Fix-it export ----------
@@ -312,25 +312,6 @@ const empty = (msg) => `<div class="empty">${msg}</div>`;
 const playlistsBadges = (pls) => pls.map((p) => `<span class="badge hot">in ${esc(p)}</span>`).join(" ");
 
 const VIEWS = {
-  async story(v) {
-    const [ov, eras] = await Promise.all([stat("overview"), stat("eras")]);
-    v.innerHTML = `
-      <div class="stats">
-        <div class="stat"><b>${fmt(Math.round(ov.minutes / 60))}</b><span>hours</span></div>
-        <div class="stat"><b>${fmt(ov.plays)}</b><span>plays</span></div>
-        <div class="stat"><b>${fmt(ov.artists)}</b><span>artists</span></div>
-        <div class="stat"><b>${fmt(ov.tracks)}</b><span>songs</span></div>
-        <div class="stat"><b>${ov.first ? ov.first.slice(0, 4) + "–" + ov.last.slice(2, 4) : "—"}</b><span>span</span></div>
-      </div>
-      <section class="section"><p class="kicker">Liner notes</p><p class="summary" id="summary">Writing your liner notes…</p></section>
-      <section class="section"><p class="kicker">Tracklist</p><h2>Your eras</h2>
-        ${eras.length ? `<ol class="eras">${eras.map((e) => `<li><div><h3>${esc(e.headline.replace("Your ", ""))}</h3>
-          <p>${esc(e.top.join(" · "))}</p></div><span class="badge">${fmt(Math.round(e.minutes / 60))} h</span></li>`).join("")}</ol>`
-          : empty("No plays in this range.")}
-      </section>`;
-    api("/api/summary").then((s) => { const el = $("#summary"); if (el) el.textContent = s.text; }).catch(() => {});
-  },
-
   async top(v) {
     const by = VIEWS.top.by || "plays";
     const d = await stat("top", `&by=${by}`);

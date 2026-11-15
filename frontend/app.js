@@ -542,6 +542,11 @@ const QUICK_VIEWS = {
   },
 };
 
+// "silence for 300 days", or for a ghost with a few stray recent plays, "only 2 plays in the last 6 months".
+const ghostGone = (g) => g.recent_plays
+  ? `only ${fmt(g.recent_plays)} play${g.recent_plays > 1 ? "s" : ""} in the last 6 months`
+  : `silence for ${fmt(g.days_gone)} days`;
+
 // "Saturdays around 21:00": the busiest weekday + hour in a clock grid.
 function peakHour({ grid }) {
   const days = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
@@ -595,7 +600,7 @@ const VIEWS = {
     });
     homeCard(v, "ghost", { kicker: "Biggest ghost", href: "/habits/ghosts" }, async () => {
       const g = (await api("/api/stats/ghosts"))[0];
-      return g ? { title: g.artist, sub: `${fmt(g.plays)} plays, then silence for ${fmt(g.days_gone)} days`, cta: "Meet your ghosts" }
+      return g ? { title: g.artist, sub: `${fmt(g.plays)} plays, then ${ghostGone(g)}`, cta: "Meet your ghosts" }
                : { title: "No ghosts", sub: "You haven't dropped anyone you used to love.", cta: "Open Ghosts" };
     });
     homeCard(v, "next", { kicker: "Try next", href: "/explore/discover" }, async () => {
@@ -653,7 +658,7 @@ const VIEWS = {
     v.innerHTML = `<p class="kicker">Artists you ghosted</p><h2>They didn't leave. You did.</h2>
       <p class="muted">Artists you played a lot who've barely come up in your last 6 months.</p>
       <div class="toolbar"><button class="btn primary" id="ghost-pl">Build a playlist of your ghosts</button></div>
-      ${g.length ? `<div class="grid">${g.map((x) => `<article class="ghost"><p class="gone">gone ${fmt(x.days_gone)} days</p>
+      ${g.length ? `<div class="grid">${g.map((x) => `<article class="ghost"><p class="gone">${x.recent_plays ? `only ${fmt(x.recent_plays)} play${x.recent_plays > 1 ? "s" : ""} in 6 months` : `gone ${fmt(x.days_gone)} days`}</p>
         <h3>${esc(x.artist)}</h3><p class="sub">${fmt(x.plays)} plays · peaked ${x.peak_month} (${x.peak_plays} plays)<br>last played ${x.last_played}</p></article>`).join("")}</div>`
         : empty("No ghosts. You're loyal.")}`;
     $("#ghost-pl").addEventListener("click", async () => exportTracks(await api("/api/actions/ghost-playlist"), "ghosts-playlist.txt"));

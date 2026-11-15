@@ -8,6 +8,7 @@ from sqlalchemy import and_, case, func, select
 from db import ArtistInfo, LocalTag, Play, PlaylistTrack, TrackInfo
 
 RECENT_DAYS = 180
+GHOST_MIN_DAYS = 30  # played in the last month = not a ghost, however rarely
 SKIP_MS = 30_000  # basic export has no skip flag; < 30s counts as a skip
 
 # Extended exports carry a real skip flag; otherwise approximate with play length.
@@ -126,7 +127,10 @@ def eras(s, pid, f):
 
 
 def ghosts(s, pid, f, limit=25):
-    """Artists with a real past footprint who've gone (nearly) silent in the last RECENT_DAYS."""
+    """Artists with a real past footprint who've gone (nearly) silent in the last RECENT_DAYS.
+
+    "Nearly": up to 3% of their old play count may still land in that window (a stray shuffle), but anyone played
+    within GHOST_MIN_DAYS of your latest play is still around, so they don't count."""
     end = last_played(s, pid)
     if not end:
         return []
@@ -137,7 +141,7 @@ def ghosts(s, pid, f, limit=25):
     out = []
     for artist, n, recent, mins, last in rows:
         past = n - recent
-        if past >= 15 and recent <= past * 0.03:
+        if past >= 15 and recent <= past * 0.03 and (end - last).days >= GHOST_MIN_DAYS:
             peak = s.execute(select(Play.month, func.count()).where(Play.profile_id == pid, Play.artist == artist)
                              .group_by(Play.month).order_by(func.count().desc()).limit(1)).first()
             out.append({"artist": artist, "plays": n, "minutes": round(mins), "recent_plays": recent,

@@ -205,3 +205,18 @@ def test_spotify_fake_mode(client, monkeypatch):
     q = client.get("/api/spotify/quick", headers=h).json()
     assert q["top"]["short_term"]["tracks"] and q["genres"] and q["playlists"] == [{"name": "Late night", "tracks": 6}]
     client.delete("/api/me", headers=h)
+
+
+def test_ghosts_skip_artists_played_recently(client):
+    """A stray play inside the last month used to make a "gone 0 days" ghost."""
+    plays = [{"endTime": f"2023-0{1 + i % 9}-{1 + i % 28:02d} 1{i % 10}:00", "artistName": a, "trackName": f"S{i}",
+              "msPlayed": 200000} for a in ("Stray", "Gone") for i in range(40)]
+    plays += [{"endTime": "2024-06-01 10:00", "artistName": "Stray", "trackName": "S0", "msPlayed": 200000},
+              {"endTime": "2024-06-01 11:00", "artistName": "Now", "trackName": "N", "msPlayed": 200000}]
+    files = [("files", ("StreamingHistory_music_0.json", json.dumps(plays)))]
+    key = client.post("/api/upload", files=files, data={"name": "Ghost test"}).json()["key"]
+    h = {"X-Profile-Key": key}
+    ghosts = {g["artist"]: g for g in client.get("/api/stats/ghosts", headers=h).json()}
+    assert "Stray" not in ghosts  # 1 play out of 41 is under 3%, but it was 0 days ago
+    assert ghosts["Gone"]["recent_plays"] == 0 and ghosts["Gone"]["days_gone"] >= 30
+    client.delete("/api/me", headers=h)

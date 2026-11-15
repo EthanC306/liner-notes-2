@@ -113,6 +113,7 @@ function initLanding() {
   $("#logout-btn").addEventListener("click", logout);
   initAuth();
   initImport();
+  initSpotify();
 }
 
 function showLanding() {
@@ -143,6 +144,27 @@ function refreshCorner() {
   $("#home-public").hidden = signedIn;
   $("#home-import").hidden = !signedIn;
   if (signedIn) $("#import-who").textContent = `Logged in as ${accountEmail()}`;
+}
+
+// Quick setup: connect Spotify. The server sends us to Spotify's login and back to /home.
+async function initSpotify() {
+  const btn = $("#spotify-connect"), st = $("#spotify-status");
+  try {
+    const sp = await api("/api/spotify/status");
+    if (!sp.configured) { btn.disabled = true; st.textContent = "Spotify isn't set up on this server yet."; }
+    else if (sp.fake) { btn.textContent = "Connect Spotify (sample data)"; st.textContent = "Test mode: uses made-up Spotify data, no login."; }
+  } catch {}
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; st.textContent = "Opening Spotify…";
+    try { location.assign((await api("/api/spotify/start", { method: "POST" })).url); }
+    catch (e) { st.textContent = e.message; btn.disabled = false; }
+  });
+  // Coming back from Spotify: /home?spotify=connected or /?spotify_error=...
+  const q = new URLSearchParams(location.search);
+  if (q.has("spotify") || q.has("spotify_error")) {
+    toast(q.get("spotify_error") || "Spotify connected. Here's your first look.");
+    history.replaceState(null, "", location.pathname);
+  }
 }
 
 // Import page drop zone (logged in only).
@@ -328,6 +350,10 @@ async function route() {
 // ---------- App shell ----------
 let bootedKey = null;
 let hasPlays = true;
+let quickMode = false;  // Spotify connected but no streaming history uploaded yet
+// Pages that work from the Spotify snapshot in quick mode; every other page shows as locked.
+const QUICK_PAGES = new Set(["home", "top", "decades", "you"]);
+const isLocked = (pageId) => quickMode && !QUICK_PAGES.has(pageId);
 
 // Load the profile once per key: header text and the filter options.
 async function boot() {
@@ -338,12 +364,16 @@ async function boot() {
   $("#signup-btn").hidden = !demoKey || demoKey !== key;
   $("#who").textContent = `The listening history of ${me.name}`;
   const ov = await api("/api/stats/overview");
-  hasPlays = ov.plays > 0;
+  hasPlays = me.has_plays;
+  quickMode = !hasPlays && me.spotify;
   const opts = ['<option value="">Any</option>', ...ov.years.map((y) => `<option>${y}</option>`)].join("");
   $("#f-start").innerHTML = opts; $("#f-end").innerHTML = opts;
   $("#f-genre").innerHTML = '<option value="">All</option>' + ov.genres.map((g) => `<option>${esc(g)}</option>`).join("");
-  $("#side-nav").innerHTML = SECTIONS.map((sec) =>
-    `<a href="${pageUrl(sec, sec.pages[0])}" data-link data-sec="${sec.id}">${esc(sec.label)}</a>`).join("");
+  // In quick mode a section whose pages are all locked is greyed out (still clickable, to explain why).
+  $("#side-nav").innerHTML = SECTIONS.map((sec) => {
+    const locked = sec.pages.every((p) => isLocked(p.id));
+    return `<a href="${pageUrl(sec, sec.pages[0])}" data-link data-sec="${sec.id}" class="${locked ? "locked" : ""}">${esc(sec.label)}${locked ? LOCK : ""}</a>`;
+  }).join("");
   bootedKey = key;
   return true;
 }
@@ -354,7 +384,7 @@ async function start(path = "/home") {
   history.pushState(null, "", path);
   await route();
   // A new account with no data yet goes straight to the upload step.
-  if (bootedKey && !hasPlays && path === "/home") navigate("/social/you", { replace: true });
+  if (bootedKey && !hasPlays && !quickMode && path === "/home") navigate("/social/you", { replace: true });
 }
 
 let renderSeq = 0;
@@ -366,11 +396,12 @@ function renderRoute({ sec, page }) {
   // Sub-tabs only for the current section (none for Home).
   const tabs = $("#tabs");
   tabs.hidden = sec.pages.length < 2;
-  tabs.innerHTML = sec.pages.map((p) => `<a href="${pageUrl(sec, p)}" data-link class="${p === page ? "active" : ""}"
-    ${p === page ? 'aria-current="page"' : ""}>${esc(p.label)}</a>`).join("");
-  // Filters only matter on pages whose numbers follow them.
-  $("#filters").hidden = !page.filtered;
-  renderChips(page.filtered);
+  tabs.innerHTML = sec.pages.map((p) => `<a href="${pageUrl(sec, p)}" data-link
+    class="${[p === page && "active", isLocked(p.id) && "locked"].filter(Boolean).join(" ")}"
+    ${p === page ? 'aria-current="page"' : ""}>${esc(p.label)}${isLocked(p.id) ? LOCK : ""}</a>`).join("");
+  // Filters only matter on pages whose numbers follow them (and never in quick mode: the snapshot has no years).
+  $("#filters").hidden = !page.filtered || quickMode;
+  renderChips(page.filtered && !quickMode);
 
   charts.forEach((c) => c.destroy()); charts = [];
   // Each render draws into a fresh box, so a slow page that finishes after you've moved on can't overwrite the new one.
@@ -378,7 +409,8 @@ function renderRoute({ sec, page }) {
   const box = document.createElement("div");
   box.innerHTML = skeleton();
   $("#view").replaceChildren(box);
-  VIEWS[page.id](box).catch((e) => { if (seq === renderSeq) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  const view = isLocked(page.id) ? (v) => lockedView(v, page) : (quickMode && QUICK_VIEWS[page.id]) || VIEWS[page.id];
+  view(box).catch((e) => { if (seq === renderSeq) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 const rerender = () => { const r = parseRoute(location.pathname); if (r) renderRoute(r); };
 
@@ -422,6 +454,93 @@ async function exportTracks(tracks, filename) {
 // ---------- Views ----------
 const empty = (msg) => `<div class="empty">${msg}</div>`;
 const playlistsBadges = (pls) => pls.map((p) => `<span class="badge hot">in ${esc(p)}</span>`).join(" ");
+
+// ---------- Quick mode (Spotify snapshot only) ----------
+const LOCK = `<svg class="lock" viewBox="0 0 24 24" width="12" height="12" role="img" aria-label="locked" fill="none"
+  stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><title>Needs your streaming history</title>
+  <rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+const UNLOCK_NOTE = `Upload your Spotify <b>extended streaming history</b> to unlock this.
+  <a href="/" data-link>Go to the import page</a>`;
+
+async function lockedView(v, page) {
+  v.innerHTML = `<div class="locked-panel">
+    <div class="locked-ghost" aria-hidden="true">${'<div class="skel-static"></div>'.repeat(6)}</div>
+    <div class="locked-msg"><p class="kicker">${LOCK} Locked</p><h2>${esc(page.label)}</h2>
+      <p>Spotify's quick connection only shares your top songs and artists, not your full history, plays or skips,
+      so ${esc(page.label)} can't be worked out yet.</p><p>${UNLOCK_NOTE}</p></div></div>`;
+}
+
+const quickBanner = (q) => `<div class="quick-banner"><span>${LOCK} <b>Quick view</b> from Spotify
+  (${new Date(q.fetched_at).toLocaleDateString()}). Plays, minutes, skips and history are locked.</span>
+  <a class="btn small" href="/" data-link>Unlock everything</a></div>`;
+
+const QUICK_VIEWS = {
+  async home(v) {
+    const q = await api("/api/spotify/quick");
+    const short = q.top.short_term, long = q.top.long_term;
+    const card = (kicker, title, sub, href, cta) => `<a class="home-card" href="${href}" data-link><p class="kicker">${esc(kicker)}</p>
+      <h3>${esc(title)}</h3>${sub ? `<p class="muted">${esc(sub)}</p>` : ""}<span class="home-cta">${esc(cta)} →</span></a>`;
+    const lockedCard = (kicker, title, href) => `<a class="home-card locked" href="${href}" data-link><p class="kicker">${LOCK} ${esc(kicker)}</p>
+      <h3>${esc(title)}</h3><p class="muted">Needs your streaming history.</p><span class="home-cta">Why it's locked →</span></a>`;
+    v.innerHTML = `${quickBanner(q)}
+      <div class="stats">
+        <div class="stat locked-stat"><b>—</b><span>hours ${LOCK}</span></div>
+        <div class="stat locked-stat"><b>—</b><span>plays ${LOCK}</span></div>
+        <div class="stat"><b>${fmt(long.artists.length)}</b><span>top artists</span></div>
+        <div class="stat"><b>${fmt(long.tracks.length)}</b><span>top songs</span></div>
+        <div class="stat"><b>${fmt(q.playlists.length)}</b><span>playlists</span></div>
+      </div>
+      <div class="home-cards">
+        ${short.artists[0] ? card("Top artist · last 4 weeks", short.artists[0].artist, short.artists[0].genres.slice(0, 2).join(" · "), "/stats/top", "See your top artists") : ""}
+        ${short.tracks[0] ? card("Top song · last 4 weeks", short.tracks[0].track, short.tracks[0].artist, "/stats/top", "See your top songs") : ""}
+        ${q.genres[0] ? card("Your main genre", q.genres[0][0], q.genres.slice(1, 4).map((g) => g[0]).join(" · "), "/stats/decades", "See genres & decades") : ""}
+        ${lockedCard("Biggest ghost", "Who did you stop playing?", "/habits/ghosts")}
+        ${lockedCard("When you listen", "Your listening clock", "/stats/clock")}
+        ${lockedCard("Rediscovery mixtape", "Songs you loved and forgot", "/explore/mixtape")}
+      </div>
+      ${q.recent.length ? `<section class="section recent"><p class="kicker">Just played</p><h2>Your last ${q.recent.length} plays</h2>
+        <ol class="quick-list">${q.recent.slice(0, 10).map((t) => `<li><b>${esc(t.track)}</b> · ${esc(t.artist)}
+          <span class="muted">${new Date(t.played_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span></li>`).join("")}</ol></section>` : ""}`;
+  },
+
+  async top(v) {
+    const q = await api("/api/spotify/quick");
+    let range = "short_term";
+    const draw = () => {
+      const t = q.top[range];
+      v.innerHTML = `${quickBanner(q)}
+        <div class="toolbar">Range ${Object.entries(q.ranges).map(([k, label]) =>
+          `<button class="btn small ${k === range ? "primary" : ""}" data-range="${k}">${esc(label)}</button>`).join("")}</div>
+        <p class="muted">Spotify ranks these but doesn't share play counts. ${LOCK} Counts and minutes unlock with your history.</p>
+        <div class="grid two">
+          <section><h2>Top songs</h2><ol class="quick-list">${t.tracks.map((x) =>
+            `<li><b>${esc(x.track)}</b><br><span class="muted">${esc(x.artist)}${x.year ? ` · ${x.year}` : ""}</span></li>`).join("") || "<li>None yet</li>"}</ol></section>
+          <section><h2>Top artists</h2><ol class="quick-list">${t.artists.map((a) =>
+            `<li><b>${esc(a.artist)}</b><br>${a.genres.map((g) => `<span class="badge">${esc(g)}</span>`).join(" ")}</li>`).join("") || "<li>None yet</li>"}</ol></section>
+        </div>`;
+      v.querySelectorAll("[data-range]").forEach((b) => b.addEventListener("click", () => { range = b.dataset.range; draw(); }));
+    };
+    draw();
+  },
+
+  async decades(v) {
+    const q = await api("/api/spotify/quick");
+    v.innerHTML = `${quickBanner(q)}
+      <p class="muted">Worked out from your top 50 songs and artists of the last year, not your full library.</p>
+      <div class="grid two">
+        <section><h2>Decades</h2><div class="chart-box"><canvas id="q-dec"></canvas></div></section>
+        <section><h2>Genres</h2><div class="chart-box"><canvas id="q-gen"></canvas></div></section>
+      </div>`;
+    const c = palette();
+    chart($("#q-dec"), { type: "bar", data: { labels: q.decades.map((d) => d[0]),
+      datasets: [{ label: "Top songs", data: q.decades.map((d) => d[1]), backgroundColor: c[0] }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false } } } });
+    chart($("#q-gen"), { type: "bar", data: { labels: q.genres.map((g) => g[0]),
+      datasets: [{ label: "Weight", data: q.genres.map((g) => g[1]), backgroundColor: c[1] }] },
+      options: { indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { display: false } } } });
+  },
+};
 
 // "Saturdays around 21:00": the busiest weekday + hour in a clock grid.
 function peakHour({ grid }) {

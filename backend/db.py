@@ -37,6 +37,15 @@ class Account(Base):
     reset_expires = Column(DateTime)
 
 
+class SpotifySnapshot(Base):
+    """Quick setup: what the Spotify Web API returned when the user connected (top items, recent plays).
+    It has no play counts or full history; uploading an export unlocks the rest of the app."""
+    __tablename__ = "spotify_snapshots"
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
+    data = Column(Text, nullable=False)  # JSON
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Play(Base):
     __tablename__ = "plays"
     id = Column(Integer, primary_key=True)

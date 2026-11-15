@@ -149,3 +149,59 @@ def test_accounts_signup_login_and_reset(client, capsys):
     # Deleting the profile deletes the account too.
     client.delete("/api/me", headers={"X-Profile-Key": key})
     assert client.post("/api/auth/login", json={"email": "ann@example.com", "password": "new-password-1"}).status_code == 401
+
+
+def test_spotify_quick_setup(client, monkeypatch):
+    """Connect flow with Spotify faked: start -> callback -> snapshot, owned playlists only, quick view."""
+    from urllib.parse import parse_qs, urlparse
+    import spotify
+
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "cid")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
+    track = lambda n, a, y: {"name": n, "type": "track", "uri": f"spotify:track:{n}", "artists": [{"name": a}],
+                             "album": {"name": "LP", "release_date": f"{y}-01-01", "images": []}}
+    fake = {
+        "/me": {"id": "me", "display_name": "Sam"},
+        "/me/top/tracks": {"items": [track("One", "A", 1999), track("Two", "B", 2015)]},
+        "/me/top/artists": {"items": [{"name": "A", "genres": ["indie rock"], "images": []}]},
+        "/me/player/recently-played": {"items": [{"track": track("One", "A", 1999), "played_at": "2026-11-01T10:00:00Z"}]},
+        "/me/playlists": {"items": [{"id": "p1", "name": "Mine", "owner": {"id": "me"}},
+                                    {"id": "p2", "name": "Theirs", "owner": {"id": "other"}}]},
+        "/playlists/p1/items": {"items": [{"item": track("One", "A", 1999)}], "next": None},
+    }
+    monkeypatch.setattr(spotify, "exchange_code", lambda code, uri: "token")
+    monkeypatch.setattr(spotify, "api_get", lambda token, path, **kw: fake[path])
+
+    key = client.post("/api/auth/signup", json={"email": "sam@example.com", "password": "password123"}).json()["key"]
+    h = {"X-Profile-Key": key}
+    assert client.get("/api/spotify/status").json() == {"configured": True, "fake": False}
+    assert client.get("/api/me", headers=h).json()["spotify"] is False
+
+    state = parse_qs(urlparse(client.post("/api/spotify/start", headers=h).json()["url"]).query)["state"][0]
+    r = client.get(f"/api/spotify/callback?state={state}&code=abc", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/home?spotify=connected"
+    # A state can only be used once.
+    r = client.get(f"/api/spotify/callback?state={state}&code=abc", follow_redirects=False)
+    assert "spotify_error" in r.headers["location"]
+
+    me = client.get("/api/me", headers=h).json()
+    assert me["spotify"] is True and me["has_plays"] is False
+    q = client.get("/api/spotify/quick", headers=h).json()
+    assert [t["track"] for t in q["top"]["long_term"]["tracks"]] == ["One", "Two"]
+    assert q["genres"][0][0] == "indie rock" and dict(q["decades"]) == {"1990s": 1, "2010s": 1}
+    assert q["playlists"] == [{"name": "Mine", "tracks": 1}]  # someone else's playlist is skipped
+    client.delete("/api/me", headers=h)
+
+
+def test_spotify_fake_mode(client, monkeypatch):
+    """SPOTIFY_FAKE=1 runs the whole connect flow with no Spotify app."""
+    monkeypatch.setenv("SPOTIFY_FAKE", "1")
+    key = client.post("/api/auth/signup", json={"email": "fake@example.com", "password": "password123"}).json()["key"]
+    h = {"X-Profile-Key": key}
+    assert client.get("/api/spotify/status").json() == {"configured": True, "fake": True}
+    url = client.post("/api/spotify/start", headers=h).json()["url"]
+    assert url.startswith("/api/spotify/callback?")
+    assert client.get(url, follow_redirects=False).headers["location"] == "/home?spotify=connected"
+    q = client.get("/api/spotify/quick", headers=h).json()
+    assert q["top"]["short_term"]["tracks"] and q["genres"] and q["playlists"] == [{"name": "Late night", "tracks": 6}]
+    client.delete("/api/me", headers=h)

@@ -50,6 +50,15 @@
       <!-- Logged in: import your Spotify export -->
       <div id="home-import" hidden>
         <p class="kicker" id="import-who">Side A · Track 1</p>
+        <section class="card quick-setup">
+          <p class="kicker">Quick setup · about a minute</p>
+          <h2>Connect Spotify for a first look</h2>
+          <p class="muted">See your top songs, artists, genres and decades straight from Spotify. History-based stats
+            (ghosts, skips, your listening clock and more) stay locked until you upload your streaming history below.</p>
+          <button class="btn primary spotify-btn" id="spotify-connect" type="button">Connect Spotify</button>
+          <p class="status" id="spotify-status" role="status"></p>
+        </section>
+        <p class="or-divider"><span>or upload your full history</span></p>
         <form id="upload-form" class="card upload">
           <label class="drop" id="drop">
             <input type="file" name="files" id="files" multiple accept=".zip,.json" hidden>

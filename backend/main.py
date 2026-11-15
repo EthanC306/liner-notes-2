@@ -14,8 +14,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 import auth
 import enrich
 import recommend
+import spotify
 import stats
-from db import Account, LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, engine, init_db
+from db import (Account, LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, SpotifySnapshot, engine,
+                init_db)
 from parser import parse_export
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +28,7 @@ APP_SECTIONS = {"home", "stats", "habits", "explore", "social"}
 
 app = FastAPI(title="Liner Notes")
 app.include_router(auth.router)
+app.include_router(spotify.router)
 init_db()
 
 
@@ -113,12 +116,15 @@ def demo(background: BackgroundTasks, s=Depends(db)):
 @app.get("/api/me")
 def me(p=Depends(profile), s=Depends(db)):
     a = s.scalar(select(Account).where(Account.profile_id == p.id))
-    return {"name": p.name, "extended": p.has_extended, "email": a.email if a else None}
+    has_plays = s.scalar(select(Play.id).where(Play.profile_id == p.id).limit(1)) is not None
+    quick = s.get(SpotifySnapshot, p.id) is not None
+    return {"name": p.name, "extended": p.has_extended, "email": a.email if a else None,
+            "has_plays": has_plays, "spotify": quick}
 
 
 @app.delete("/api/me")
 def delete_me(p=Depends(profile), s=Depends(db)):
-    for model in (Account, Play, PlaylistTrack, LocalTag, Mixtape):
+    for model in (Account, SpotifySnapshot, Play, PlaylistTrack, LocalTag, Mixtape):
         s.execute(delete(model).where(model.profile_id == p.id))
     s.execute(delete(Profile).where(Profile.id == p.id))
     s.commit()

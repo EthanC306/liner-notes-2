@@ -37,6 +37,10 @@ This gets around Spotify's 5-user Development Mode cap, since no Spotify login i
 | `LASTFM_API_KEY` | none | Genres, similar artists, top tracks ([get a free key](https://www.last.fm/api/account/create)) |
 | `OLLAMA_URL` | `http://localhost:11434` | Optional local LLM |
 | `OLLAMA_MODEL` | first installed model | e.g. `llama3.2` |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | none | Quick setup ("Connect Spotify"). From the [Spotify developer dashboard](https://developer.spotify.com/dashboard). Development Mode allows 5 users, each added in the dashboard, and the app owner needs Premium |
+| `SPOTIFY_REDIRECT_URI` | `<site>/api/spotify/callback` | Must exactly match a redirect URI registered in the dashboard. Spotify rejects `localhost`, so locally open the site at `http://127.0.0.1:8000` and register `http://127.0.0.1:8000/api/spotify/callback` |
+| `SPOTIFY_FAKE` | off | `1` makes "Connect Spotify" skip the real login and use built-in sample data, to try quick setup without keys (`make run-fake-spotify`) |
+| `PUBLIC_URL` | the request's address | Base of password-reset links (printed to the server log until email is set up) |
 
 Without Last.fm, real uploads won't have genres, recommendations, or the genre half of eras (the demo
 has its metadata seeded). Without Ollama, the summary uses a template and recommendations show

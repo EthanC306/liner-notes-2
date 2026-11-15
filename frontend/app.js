@@ -6,7 +6,6 @@ const KEY_STORE = "linernotes.key";
 
 let key = null;
 let charts = [];
-let currentTab = "top";
 
 function getKey() { try { return localStorage.getItem(KEY_STORE); } catch { return null; } }
 function setKey(k) { key = k; try { k ? localStorage.setItem(KEY_STORE, k) : localStorage.removeItem(KEY_STORE); } catch {} }
@@ -106,7 +105,6 @@ async function openDemo() {
 
 function initLanding() {
   $("#demo-btn").addEventListener("click", openDemo);
-  $("#back-btn").addEventListener("click", () => history.back());
   // Account buttons: the landing corner, the demo's Sign up, and the logged-in corner.
   $("#login-btn").addEventListener("click", () => openAuth("login"));
   $("#landing-signup-btn").addEventListener("click", () => openAuth("signup"));
@@ -119,6 +117,7 @@ function initLanding() {
 
 function showLanding() {
   $("#app").hidden = true; $("#landing").hidden = false;
+  document.title = "Liner Notes";
   refreshCorner();
 }
 
@@ -215,10 +214,10 @@ async function submitAuth(e) {
       return;
     }
     setKey(r.key); setAccount(r.email);
-    if (authMode === "reset") history.replaceState(null, "", location.pathname);
+    if (authMode === "reset") history.replaceState(null, "", "/");
     $("#auth").close(); form.reset();
     toast(authMode === "signup" ? `Welcome, ${r.name}!` : authMode === "reset" ? "Password updated." : `Welcome back, ${r.name}.`);
-    showLanding();  // logged-in home = import page
+    navigate("/");  // logged-in home = import page
   } catch (err) {
     $("#auth-error").textContent = err.message;
     $("#auth-submit").disabled = false;
@@ -254,46 +253,159 @@ function initAuth() {
   // Reset links look like /?reset=<token>
   resetToken = new URLSearchParams(location.search).get("reset");
   if (resetToken) openAuth("reset");
-  // Keep an account's key across visits; a leftover demo key is dropped as before.
-  if (accountEmail()) key = getKey();
+  // Keep the saved key across visits so links like /stats/top open straight into the app.
+  key = getKey();
   refreshCorner();
 }
 
 function logout() {
   setKey(null); setAccount(null); cache.clear();
+  history.pushState(null, "", "/");
   showLanding();
-  if (history.state?.app) history.replaceState(null, "", location.pathname);
   toast("Logged out.");
 }
 
-// The browser's back button works too: entering the app adds a history entry, going back shows the landing page.
-window.addEventListener("popstate", () => { if (!history.state?.app) showLanding(); });
+// ---------- Pages and URLs ----------
+// Every page has its own URL (/stats/top, /explore/mixtape, ...), so the back button and shared links work.
+// `filtered` marks the pages whose numbers follow the From / To / Genre filters.
+const SECTIONS = [
+  { id: "home", label: "Home", pages: [{ id: "home", label: "Overview" }] },
+  { id: "stats", label: "Stats", pages: [
+    { id: "top", label: "Top", filtered: true },
+    { id: "time", label: "Over time", filtered: true },
+    { id: "decades", label: "Decades & genres", filtered: true },
+    { id: "clock", label: "Clock", filtered: true },
+  ] },
+  { id: "habits", label: "Habits", pages: [
+    { id: "ghosts", label: "Ghosts", filtered: true },
+    { id: "love", label: "Skips & love", filtered: true },
+    { id: "cleanup", label: "Clean up" },
+  ] },
+  { id: "explore", label: "Explore", pages: [
+    { id: "discover", label: "Discover" },
+    { id: "mixtape", label: "Mixtape" },
+    { id: "local", label: "Local scene" },
+  ] },
+  { id: "social", label: "Social", pages: [
+    { id: "compare", label: "Compare" },
+    { id: "you", label: "You" },
+  ] },
+];
+const pageUrl = (sec, page) => (sec.id === "home" ? "/home" : `/${sec.id}/${page.id}`);
+
+// "/stats/top" -> { sec, page }. "/stats" opens the section's first page. Anything else is not an app page.
+function parseRoute(path) {
+  const [secId, pageId] = path.replace(/^\/+|\/+$/g, "").split("/");
+  const sec = SECTIONS.find((x) => x.id === secId);
+  if (!sec) return null;
+  const page = sec.pages.find((p) => p.id === pageId) || (!pageId || sec.id === "home" ? sec.pages[0] : null);
+  return page ? { sec, page } : null;
+}
+
+function navigate(path, { replace = false } = {}) {
+  if (path !== location.pathname) history[replace ? "replaceState" : "pushState"](null, "", path);
+  route();
+}
+
+// Links marked data-link change pages without reloading.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-link]");
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  navigate(a.getAttribute("href"));
+});
+window.addEventListener("popstate", () => route());
+
+// Show whatever the URL says: the landing page for "/", otherwise an app page (if there's a profile to show).
+async function route() {
+  const r = parseRoute(location.pathname);
+  if (!r) { showLanding(); return; }
+  if (!key) { history.replaceState(null, "", "/"); showLanding(); return; }
+  if (bootedKey !== key && !(await boot())) return;
+  renderRoute(r);
+}
 
 // ---------- App shell ----------
-async function start() {
+let bootedKey = null;
+let hasPlays = true;
+
+// Load the profile once per key: header text and the filter options.
+async function boot() {
   let me;
-  try { me = await api("/api/me"); } catch { setKey(null); $("#landing").hidden = false; $("#app").hidden = true; return; }
-  $("#landing").hidden = true; $("#app").hidden = false;
-  if (!history.state?.app) history.pushState({ app: true }, "", location.pathname);
+  try { me = await api("/api/me"); } catch { setKey(null); history.replaceState(null, "", "/"); showLanding(); return false; }
   let demoKey = null;
   try { demoKey = localStorage.getItem(DEMO_STORE); } catch {}
   $("#signup-btn").hidden = !demoKey || demoKey !== key;
   $("#who").textContent = `The listening history of ${me.name}`;
   const ov = await api("/api/stats/overview");
+  hasPlays = ov.plays > 0;
   const opts = ['<option value="">Any</option>', ...ov.years.map((y) => `<option>${y}</option>`)].join("");
   $("#f-start").innerHTML = opts; $("#f-end").innerHTML = opts;
   $("#f-genre").innerHTML = '<option value="">All</option>' + ov.genres.map((g) => `<option>${esc(g)}</option>`).join("");
-  if (!ov.plays) currentTab = "settings";  // new account with no data yet: go straight to the upload step
-  render();
+  $("#side-nav").innerHTML = SECTIONS.map((sec) =>
+    `<a href="${pageUrl(sec, sec.pages[0])}" data-link data-sec="${sec.id}">${esc(sec.label)}</a>`).join("");
+  bootedKey = key;
+  return true;
 }
 
-function render() {
-  charts.forEach((c) => c.destroy()); charts = [];
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab));
-  const view = $("#view");
-  view.innerHTML = '<p class="muted">Loading…</p>';
-  (VIEWS[currentTab] || VIEWS.top)(view).catch((e) => (view.innerHTML = `<div class="empty">${esc(e.message)}</div>`));
+// Enter the app (after the demo, an upload, logging in, or "My liner notes").
+async function start(path = "/home") {
+  bootedKey = null;  // the profile or its data may have changed
+  history.pushState(null, "", path);
+  await route();
+  // A new account with no data yet goes straight to the upload step.
+  if (bootedKey && !hasPlays && path === "/home") navigate("/social/you", { replace: true });
 }
+
+let renderSeq = 0;
+function renderRoute({ sec, page }) {
+  $("#landing").hidden = true; $("#app").hidden = false;
+  document.title = `${page.id === "home" ? "Home" : page.label} · Liner Notes`;
+  $("#page-title").textContent = sec.id === "home" ? "Home" : sec.label;
+  $("#side-nav").querySelectorAll("a").forEach((a) => a.classList.toggle("active", a.dataset.sec === sec.id));
+  // Sub-tabs only for the current section (none for Home).
+  const tabs = $("#tabs");
+  tabs.hidden = sec.pages.length < 2;
+  tabs.innerHTML = sec.pages.map((p) => `<a href="${pageUrl(sec, p)}" data-link class="${p === page ? "active" : ""}"
+    ${p === page ? 'aria-current="page"' : ""}>${esc(p.label)}</a>`).join("");
+  // Filters only matter on pages whose numbers follow them.
+  $("#filters").hidden = !page.filtered;
+  renderChips(page.filtered);
+
+  charts.forEach((c) => c.destroy()); charts = [];
+  // Each render draws into a fresh box, so a slow page that finishes after you've moved on can't overwrite the new one.
+  const seq = ++renderSeq;
+  const box = document.createElement("div");
+  box.innerHTML = skeleton();
+  $("#view").replaceChildren(box);
+  VIEWS[page.id](box).catch((e) => { if (seq === renderSeq) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+}
+const rerender = () => { const r = parseRoute(location.pathname); if (r) renderRoute(r); };
+
+// ---------- Active filter chips ----------
+function renderChips(show) {
+  const chips = [["f-start", "From"], ["f-end", "To"], ["f-genre", "Genre"]]
+    .filter(([id]) => $("#" + id).value)
+    .map(([id, label]) => `<button class="chip" type="button" data-clear="${id}" aria-label="Remove ${label} filter">
+      ${label}: ${esc($("#" + id).value)} <span aria-hidden="true">✕</span></button>`);
+  const box = $("#filter-chips");
+  box.hidden = !show || !chips.length;
+  box.innerHTML = `<span class="chip-label">Filtered</span>${chips.join("")}
+    ${chips.length > 1 ? '<button class="chip-clear" type="button" data-clear="all">Clear all</button>' : ""}`;
+}
+$("#filter-chips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-clear]");
+  if (!b) return;
+  const ids = b.dataset.clear === "all" ? ["f-start", "f-end", "f-genre"] : [b.dataset.clear];
+  ids.forEach((id) => ($("#" + id).value = ""));
+  rerender();
+});
+
+// ---------- Loading states ----------
+const skeleton = (cards = 3) => `<div class="skel-wrap" aria-busy="true" aria-label="Loading">
+  <div class="skel skel-line" style="width:40%"></div><div class="skel skel-line" style="width:65%"></div>
+  <div class="grid">${'<div class="skel skel-card"></div>'.repeat(cards)}</div></div>`;
+const spinner = (msg) => `<p class="loading"><span class="spinner" aria-hidden="true"></span>${esc(msg)}</p>`;
 
 // ---------- Fix-it export ----------
 async function exportTracks(tracks, filename) {
@@ -311,7 +423,75 @@ async function exportTracks(tracks, filename) {
 const empty = (msg) => `<div class="empty">${msg}</div>`;
 const playlistsBadges = (pls) => pls.map((p) => `<span class="badge hot">in ${esc(p)}</span>`).join(" ");
 
+// "Saturdays around 21:00": the busiest weekday + hour in a clock grid.
+function peakHour({ grid }) {
+  const days = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
+  const [, d, h] = grid.flatMap((r, d) => r.map((n, h) => [n, d, h])).sort((a, b) => b[0] - a[0])[0];
+  return `${days[d]} around ${h}:00`;
+}
+
+// A card on Home that fills itself in when its data arrives and links into its section.
+function homeCard(v, id, { kicker, href }, load) {
+  const card = v.querySelector(`[data-card="${id}"]`);
+  card.innerHTML = `<p class="kicker">${esc(kicker)}</p><div class="skel skel-line" style="width:70%"></div>
+    <div class="skel skel-line" style="width:45%"></div>`;
+  card.href = href;
+  load().then(({ title, sub, cta }) => {
+    card.innerHTML = `<p class="kicker">${esc(kicker)}</p><h3>${esc(title)}</h3>
+      ${sub ? `<p class="muted">${esc(sub)}</p>` : ""}<span class="home-cta">${esc(cta)} →</span>`;
+  }).catch(() => {
+    card.innerHTML = `<p class="kicker">${esc(kicker)}</p><p class="muted">Couldn't load this one.</p><span class="home-cta">Open →</span>`;
+  });
+}
+
 const VIEWS = {
+  async home(v) {
+    const ov = await api("/api/stats/overview");
+    if (!ov.plays) {
+      v.innerHTML = empty('No listening data yet. <a href="/social/you" data-link>Upload your Spotify export</a> to fill this in.');
+      return;
+    }
+    const year = ov.years[ov.years.length - 1];
+    v.innerHTML = `
+      <div class="stats">
+        <div class="stat"><b>${fmt(Math.round(ov.minutes / 60))}</b><span>hours</span></div>
+        <div class="stat"><b>${fmt(ov.plays)}</b><span>plays</span></div>
+        <div class="stat"><b>${fmt(ov.artists)}</b><span>artists</span></div>
+        <div class="stat"><b>${fmt(ov.tracks)}</b><span>songs</span></div>
+        <div class="stat"><b>${ov.first.slice(0, 4)}–${ov.last.slice(2, 4)}</b><span>span</span></div>
+      </div>
+      <div class="home-cards">
+        ${["artist", "song", "ghost", "next", "mixtape", "clock"].map((id) => `<a class="home-card" data-link data-card="${id}"></a>`).join("")}
+      </div>`;
+    const topYear = api(`/api/stats/top?start=${year}&end=${year}`);
+    homeCard(v, "artist", { kicker: `Top artist of ${year}`, href: "/stats/top" }, async () => {
+      const a = (await topYear).artists[0];
+      return a ? { title: a.artist, sub: `${fmt(a.minutes)} minutes · ${fmt(a.plays)} plays`, cta: "See your top artists" }
+               : { title: "Nothing yet", cta: "See your top artists" };
+    });
+    homeCard(v, "song", { kicker: `Most-played song of ${year}`, href: "/stats/top" }, async () => {
+      const t = (await topYear).tracks[0];
+      return t ? { title: t.track, sub: `${t.artist} · ${fmt(t.plays)} plays`, cta: "See your top songs" }
+               : { title: "Nothing yet", cta: "See your top songs" };
+    });
+    homeCard(v, "ghost", { kicker: "Biggest ghost", href: "/habits/ghosts" }, async () => {
+      const g = (await api("/api/stats/ghosts"))[0];
+      return g ? { title: g.artist, sub: `${fmt(g.plays)} plays, then silence for ${fmt(g.days_gone)} days`, cta: "Meet your ghosts" }
+               : { title: "No ghosts", sub: "You haven't dropped anyone you used to love.", cta: "Open Ghosts" };
+    });
+    homeCard(v, "next", { kicker: "Try next", href: "/explore/discover" }, async () => {
+      const c = (await api("/api/recommendations?ai=false")).items[0];
+      return c ? { title: c.artist, sub: c.because?.length ? `Because you play ${c.because.slice(0, 2).join(" and ")}` : "", cta: "More to discover" }
+               : { title: "Still looking", sub: "Similar-artist data is still being looked up.", cta: "Open Discover" };
+    });
+    homeCard(v, "mixtape", { kicker: "Rediscovery mixtape", href: "/explore/mixtape" }, async () => (
+      { title: "Songs you loved and forgot", sub: "A tape built from your old favorites, walked through your eras.", cta: "Make a mixtape" }));
+    homeCard(v, "clock", { kicker: "When you listen", href: "/stats/clock" }, async () => {
+      const c = await api("/api/stats/clock");
+      return { title: peakHour(c), sub: "Your busiest time for music", cta: "See your listening clock" };
+    });
+  },
+
   async top(v) {
     const by = VIEWS.top.by || "plays";
     const d = await stat("top", `&by=${by}`);
@@ -433,7 +613,7 @@ const VIEWS = {
   },
 
   async discover(v) {
-    v.innerHTML = `<p class="kicker">Discover</p><h2>Who to try next</h2><p class="muted">Ranking candidates from real similar-artist data…</p>`;
+    v.innerHTML = `<p class="kicker">Discover</p><h2>Who to try next</h2>${spinner("Ranking candidates from real similar-artist data…")}${skeleton(6)}`;
     const r = await api("/api/recommendations");
     v.innerHTML = `<p class="kicker">Discover</p><h2>Who to try next</h2>
       <p class="muted">${r.ai ? "Ranked and explained by the local AI, which can only pick from real similar-artist data." : "Ranked by similarity to what you play now. (The local AI is off, so no written explanations.)"}</p>
@@ -498,12 +678,12 @@ const VIEWS = {
         <label>Gone at least <input type="range" id="mx-gone" min="1" max="24" value="6"> <b id="mx-gone-v">6</b> mo</label>
         <label class="check"><input type="checkbox" id="mx-ai" checked> AI liner notes</label>
       </div>
-      <div id="mx-out"><p class="muted">Rewinding…</p></div>
+      <div id="mx-out">${spinner("Rewinding…")}</div>
       <section class="section" id="mx-saved"></section>`;
     let tape = null;
     const draw = async () => {
       $("#mx-len-v").textContent = $("#mx-len").value; $("#mx-gone-v").textContent = $("#mx-gone").value;
-      $("#mx-out").innerHTML = '<p class="muted">Rewinding…</p>';
+      $("#mx-out").innerHTML = spinner("Rewinding…");
       tape = await api(`/api/mixtape?length=${$("#mx-len").value}&months_gone=${$("#mx-gone").value}&ai=${$("#mx-ai").checked}`);
       if (!tape.tracks.length) { $("#mx-out").innerHTML = empty("Nothing you loved has gone quiet that long. Try a shorter gap."); return; }
       $("#mx-out").innerHTML = `${cassette(tape.title, tape.tracks, tape.ai ? "liner notes by AI" : "")}
@@ -534,7 +714,7 @@ const VIEWS = {
     await Promise.all([draw(), drawSaved()]);
   },
 
-  async settings(v) {
+  async you(v) {
     const me = await api("/api/me");
     v.innerHTML = `<h2>${esc(me.name)}</h2>
       ${me.email ? `<p class="muted">Logged in as ${esc(me.email)}</p>` : ""}
@@ -574,10 +754,8 @@ async function showShared(slug) {
 }
 
 // ---------- Boot ----------
-document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => { currentTab = b.dataset.tab; render(); }));
-["f-start", "f-end", "f-genre"].forEach((id) => $("#" + id).addEventListener("change", render));
+["f-start", "f-end", "f-genre"].forEach((id) => $("#" + id).addEventListener("change", rerender));
 initLanding();
 const sharedSlug = new URLSearchParams(location.search).get("mixtape");
 if (sharedSlug) showShared(sharedSlug);
-// Always open on the landing page.
-if (history.state?.app) history.replaceState(null, "", location.pathname + location.search);
+else route();

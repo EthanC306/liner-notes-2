@@ -21,6 +21,8 @@ from parser import parse_export
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 MAX_UPLOAD = 200 * 1024 * 1024
+# The app's pages (/home, /stats/top, /explore/mixtape, ...) are drawn by app.js, so each of those URLs gets index.html.
+APP_SECTIONS = {"home", "stats", "habits", "explore", "social"}
 
 app = FastAPI(title="Liner Notes")
 app.include_router(auth.router)
@@ -31,7 +33,8 @@ init_db()
 async def revalidate_frontend(request, call_next):
     """Make browsers re-check the HTML/CSS/JS each load (cheap 304 via ETag), so edits show up without a hard refresh."""
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
+    path = request.url.path
+    if path == "/" or path.startswith("/static/") or path.strip("/").split("/")[0] in APP_SECTIONS:
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -263,4 +266,12 @@ app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
 
 @app.get("/")
 def index():
+    return FileResponse(FRONTEND / "index.html")
+
+
+@app.get("/{section}")
+@app.get("/{section}/{page}")
+def app_page(section: str, page: str = ""):
+    if section not in APP_SECTIONS:
+        raise HTTPException(404, "Not found")
     return FileResponse(FRONTEND / "index.html")

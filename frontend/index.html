@@ -81,39 +81,34 @@
   </section>
 
   <!-- App -->
-  <div id="app" hidden>
-    <header class="masthead">
-      <div>
-        <button class="btn ghost small back-btn" id="back-btn" type="button">&larr; Back</button>
-        <p class="kicker" id="who"></p>
-        <h1 class="mast-title">Liner Notes</h1>
-      </div>
-      <div class="mast-right">
-      <button class="btn auth-btn" id="signup-btn" type="button">Sign up</button>
-      <div class="filters" aria-label="Filters">
-        <label>From <select id="f-start"></select></label>
-        <label>To <select id="f-end"></select></label>
-        <label>Genre <select id="f-genre"><option value="">All</option></select></label>
-      </div>
-      </div>
-    </header>
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <a class="side-logo" href="/home" data-link>Liner Notes</a>
+      <nav class="side-nav" id="side-nav" aria-label="Sections"></nav>
+      <a class="side-exit" href="/" data-link>&larr; Main page</a>
+    </aside>
 
-    <nav class="tabs" id="tabs">
-      <button data-tab="top" class="active">Top</button>
-      <button data-tab="time">Over time</button>
-      <button data-tab="ghosts">Ghosts</button>
-      <button data-tab="decades">Decades &amp; genres</button>
-      <button data-tab="clock">Clock</button>
-      <button data-tab="love">Skips &amp; love</button>
-      <button data-tab="cleanup">Clean up</button>
-      <button data-tab="mixtape">Mixtape</button>
-      <button data-tab="discover">Discover</button>
-      <button data-tab="compare">Compare</button>
-      <button data-tab="local">Local scene</button>
-      <button data-tab="settings">You</button>
-    </nav>
+    <div class="app-main">
+      <header class="masthead">
+        <div>
+          <p class="kicker" id="who"></p>
+          <h1 class="mast-title" id="page-title">Home</h1>
+        </div>
+        <div class="mast-right">
+          <button class="btn auth-btn" id="signup-btn" type="button">Sign up</button>
+          <div class="filters" id="filters" aria-label="Filters">
+            <label>From <select id="f-start"></select></label>
+            <label>To <select id="f-end"></select></label>
+            <label>Genre <select id="f-genre"><option value="">All</option></select></label>
+          </div>
+        </div>
+      </header>
+      <div class="filter-chips" id="filter-chips" aria-live="polite" hidden></div>
 
-    <main id="view" class="view"></main>
+      <nav class="tabs" id="tabs" aria-label="Pages in this section"></nav>
+
+      <main id="view" class="view"></main>
+    </div>
   </div>
 
   <!-- Shared mixtape (public link) -->

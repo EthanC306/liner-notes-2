@@ -1,5 +1,19 @@
+# `docker compose up` -> http://localhost:8000 (SQLite, data kept in a volume).
+# `docker compose --profile postgres up` also starts Postgres; set DATABASE_URL in .env to use it.
 services:
+  app:
+    build: .
+    image: ghcr.io/ethanc306/liner-notes-2:latest
+    ports: ["8000:8000"]
+    env_file:
+      - path: .env
+        required: false
+    volumes: [appdata:/data]
+    extra_hosts: ["host.docker.internal:host-gateway"]  # lets the app reach Ollama on your machine
+    restart: unless-stopped
+
   db:
+    profiles: [postgres]
     image: postgres:16
     environment:
       POSTGRES_USER: liner
@@ -7,5 +21,7 @@ services:
       POSTGRES_DB: linernotes
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
+
 volumes:
+  appdata:
   pgdata:

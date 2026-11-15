@@ -7,7 +7,34 @@ clock, friend **compatibility**, a **local scene** map, and recommendations.
 
 See [PLAN.md](PLAN.md) for the design decisions and risks.
 
-## Quick start (demo data, no Spotify needed)
+## Run it
+
+### With Docker (recommended)
+
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine) and git.
+
+```bash
+git clone https://github.com/EthanC306/liner-notes-2.git
+cd liner-notes-2
+docker compose up --build
+```
+
+Open **http://localhost:8000** and click **Try the demo listener**. Demo data is built into the
+image, so this works with no accounts or API keys. Stop it with `Ctrl+C`; your data is kept in a
+Docker volume (`docker compose down -v` wipes it).
+
+Prefer not to clone? Run a released image directly:
+
+```bash
+docker run -p 8000:8000 ghcr.io/ethanc306/liner-notes-2:latest
+```
+
+To turn on optional features (Last.fm, Spotify login, Ollama), copy `.env.example` to `.env`,
+fill in what you need, and restart. See [Configuration](#configuration-environment-variables).
+
+### Without Docker (for development)
+
+Needs Python 3.12+.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -17,8 +44,6 @@ cd backend && ../.venv/bin/uvicorn main:app --reload
 ```
 
 Or the short version: `make setup` once, then `make` (also `make test`, `make demo`).
-
-Open http://localhost:8000 and click **Try the demo listener**.
 
 ## Using real data
 
@@ -33,7 +58,7 @@ This gets around Spotify's 5-user Development Mode cap, since no Spotify login i
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | SQLite file in `backend/` | e.g. `postgresql+psycopg://liner:liner@localhost:5432/linernotes` (`docker compose up -d` starts one) |
+| `DATABASE_URL` | SQLite file in `backend/` | e.g. `postgresql+psycopg://liner:liner@localhost:5432/linernotes` (`docker compose --profile postgres up` starts one; use host `db` instead of `localhost` from inside Docker) |
 | `LASTFM_API_KEY` | none | Genres, similar artists, top tracks ([get a free key](https://www.last.fm/api/account/create)) |
 | `OLLAMA_URL` | `http://localhost:11434` | Optional local LLM |
 | `OLLAMA_MODEL` | first installed model | e.g. `llama3.2` |
@@ -46,6 +71,23 @@ Without Last.fm, real uploads won't have genres, recommendations, or the genre h
 has its metadata seeded). Without Ollama, the summary uses a template and recommendations show
 similarity reasons instead of AI-written explanations.
 
+## Releases
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the tests and builds and smoke-tests
+the Docker image on every push to `main` and every pull request.
+
+To publish a version, tag it and push the tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+[`release.yml`](.github/workflows/release.yml) then runs the tests, pushes the image to
+`ghcr.io/ethanc306/liner-notes-2` as `1.0.0`, `1.0` and `latest`, and creates a GitHub Release with
+generated notes. Use [semantic versioning](https://semver.org): bump the patch for fixes, the minor
+for new features.
+
 ## Layout
 
 ```
@@ -54,6 +96,8 @@ backend/   main.py (API routes)  stats.py (SQL stats)  parser.py (export parsing
 frontend/  index.html  styles.css  app.js (vanilla JS + Chart.js)
 scripts/   make_sample_export.py
 tests/     test_app.py  (run: .venv/bin/pytest)
+Dockerfile, docker-compose.yml, docker-entrypoint.sh, .env.example
+.github/workflows/  ci.yml  release.yml
 ```
 
 ## Rediscovery Mixtape

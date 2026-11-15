@@ -4,3 +4,4 @@ __pycache__/
 *_export.zip
 .env
 .pytest_cache/
+tests/test.db

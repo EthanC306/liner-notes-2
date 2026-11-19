@@ -18,7 +18,7 @@ import spotify
 import stats
 from db import (Account, LocalTag, Mixtape, Play, PlaylistTrack, Profile, SessionLocal, SpotifySnapshot, engine,
                 init_db)
-from parser import parse_export
+from parser import ExportError, parse_export
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -79,15 +79,20 @@ async def upload(background: BackgroundTasks, files: list[UploadFile] = File(...
             raise HTTPException(413, "File too large")
         blobs.append((f.filename or "", data))
     p = s.scalar(select(Profile).where(Profile.secret == x_profile_key)) if x_profile_key else None
+    if p and p.secret in DEMO_KEYS:
+        p = None  # never merge someone's history into the shared demo; give them their own profile
     return _ingest(s, background, blobs, name, p)
 
 
-def _ingest(s, background, blobs, name, p=None):
-    plays, playlist_tracks, extended = parse_export(blobs)
+def _ingest(s, background, blobs, name, p=None, secret=None):
+    try:
+        plays, playlist_tracks, extended = parse_export(blobs)
+    except ExportError as e:
+        raise HTTPException(400, str(e))
     if not plays and not playlist_tracks:
         raise HTTPException(400, "No Spotify streaming history or playlists found in those files.")
     if not p:
-        p = Profile(name=name.strip()[:80] or "Listener", secret=secrets.token_urlsafe(24))
+        p = Profile(name=name.strip()[:80] or "Listener", secret=secret or secrets.token_urlsafe(24))
         s.add(p)
         s.flush()
     p.has_extended = p.has_extended or extended
@@ -101,15 +106,39 @@ def _ingest(s, background, blobs, name, p=None):
             "playlist_tracks": len(playlist_tracks), "extended": p.has_extended}
 
 
+# Every visitor shares one demo listener and one demo friend, loaded once, instead of a fresh copy per click.
+DEMO_LISTENER, DEMO_FRIEND = "demo-listener", "demo-friend"
+DEMO_KEYS = {DEMO_LISTENER, DEMO_FRIEND}
+
+
+def _demo_profile(s, background, path, name, secret):
+    p = s.scalar(select(Profile).where(Profile.secret == secret))
+    if p:
+        return {"key": p.secret, "name": p.name, "extended": p.has_extended}
+    return _ingest(s, background, [(path.name, path.read_bytes())], name, secret=secret)
+
+
+def _drop_old_demo_copies(s):
+    """Clean up the per-click demo copies older versions created (no account, demo name, random key)."""
+    old = s.scalars(select(Profile.id).where(Profile.name.in_(["Demo Listener", "Demo Friend"]),
+                                             Profile.secret.not_in(DEMO_KEYS),
+                                             Profile.id.not_in(select(Account.profile_id)))).all()
+    for pid in old:
+        _delete_profile(s, pid)
+    s.commit()
+
+
 @app.post("/api/demo")
 def demo(background: BackgroundTasks, s=Depends(db)):
-    """Load the generated sample listener (and a friend to compare against)."""
+    """Return the shared sample listener (and a friend to compare against), loading them the first time."""
     sample, friend = ROOT / "sample_export.zip", ROOT / "friend_export.zip"
     if not sample.exists():
         raise HTTPException(404, "No demo data. Run: python scripts/make_sample_export.py --seed-db")
-    out = _ingest(s, background, [(sample.name, sample.read_bytes())], "Demo Listener")
+    if not s.scalar(select(Profile.id).where(Profile.secret == DEMO_LISTENER)):
+        _drop_old_demo_copies(s)
+    out = _demo_profile(s, background, sample, "Demo Listener", DEMO_LISTENER)
     if friend.exists():
-        out["friend_key"] = _ingest(s, background, [(friend.name, friend.read_bytes())], "Demo Friend")["key"]
+        out["friend_key"] = _demo_profile(s, background, friend, "Demo Friend", DEMO_FRIEND)["key"]
     return out
 
 
@@ -124,11 +153,17 @@ def me(p=Depends(profile), s=Depends(db)):
 
 @app.delete("/api/me")
 def delete_me(p=Depends(profile), s=Depends(db)):
-    for model in (Account, SpotifySnapshot, Play, PlaylistTrack, LocalTag, Mixtape):
-        s.execute(delete(model).where(model.profile_id == p.id))
-    s.execute(delete(Profile).where(Profile.id == p.id))
+    if p.secret in DEMO_KEYS:
+        raise HTTPException(403, "The demo listener is shared, so it can't be deleted.")
+    _delete_profile(s, p.id)
     s.commit()
     return {"deleted": True}
+
+
+def _delete_profile(s, pid):
+    for model in (Account, SpotifySnapshot, Play, PlaylistTrack, LocalTag, Mixtape):
+        s.execute(delete(model).where(model.profile_id == pid))
+    s.execute(delete(Profile).where(Profile.id == pid))
 
 
 def stat_route(path, fn):

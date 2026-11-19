@@ -220,3 +220,32 @@ def test_ghosts_skip_artists_played_recently(client):
     assert "Stray" not in ghosts  # 1 play out of 41 is under 3%, but it was 0 days ago
     assert ghosts["Gone"]["recent_plays"] == 0 and ghosts["Gone"]["days_gone"] >= 30
     client.delete("/api/me", headers=h)
+
+
+def test_bad_uploads_get_clear_errors(client):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:  # right shape, wrong fields (e.g. a reformatted export)
+        zf.writestr("StreamingHistory_music_0.json", json.dumps([{"endTime": "yesterday", "trackName": "S",
+                                                                  "msPlayed": 99999}]))
+    cases = [("my_spotify_data.zip", b""), ("my_spotify_data.zip", b"PK\x03\x04 not really a zip"),
+             ("my_spotify_data.zip", buf.getvalue()), ("notes.txt", b"hello")]
+    for fname, data in cases:
+        r = client.post("/api/upload", files=[("files", (fname, data))])
+        assert r.status_code == 400, (fname, r.text)
+        assert "Spotify" in r.json()["detail"]
+
+
+def test_demo_is_shared_not_copied(client, keys):
+    from db import Profile, SessionLocal
+    h, friend = keys
+    again = client.post("/api/demo").json()
+    assert again["key"] == h["X-Profile-Key"] and again["friend_key"] == friend
+    with SessionLocal() as s:
+        assert s.query(Profile).filter(Profile.name == "Demo Listener").count() == 1
+    assert client.delete("/api/me", headers=h).status_code == 403
+    files = [("files", ("StreamingHistory_music_0.json",
+                        json.dumps([{"endTime": "2024-03-01 10:00", "artistName": "Z", "trackName": "Q", "msPlayed": 99999}])))]
+    mine = client.post("/api/upload", files=files, headers=h).json()["key"]
+    assert mine not in (h["X-Profile-Key"], friend)  # uploads never merge into the shared demo

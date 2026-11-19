@@ -23,35 +23,58 @@ def _parse_dt(s: str) -> datetime:
     raise ValueError(f"bad date {s!r}")
 
 
+class ExportError(ValueError):
+    """The upload isn't a readable Spotify export; the message is safe to show the user."""
+
+
+HOW_TO = "Upload the .zip from Spotify (Account > Privacy > Download your data), or the JSON files inside it."
+
+
 def _iter_json_files(filename: str, data: bytes):
+    label = filename or "That file"
+    if not data:
+        raise ExportError(f"{label} is empty. {HOW_TO}")
     if filename.lower().endswith(".zip"):
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for name in zf.namelist():
-                if name.lower().endswith(".json"):
-                    yield name.rsplit("/", 1)[-1], zf.read(name)
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(data))
+            with zf:
+                for name in zf.namelist():
+                    if name.lower().endswith(".json"):
+                        yield name.rsplit("/", 1)[-1], zf.read(name)
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, OSError, NotImplementedError, RuntimeError):
+            raise ExportError(f"{label} isn't a valid zip file (it may be damaged or incomplete). {HOW_TO}")
     elif filename.lower().endswith(".json"):
         yield filename, data
+    else:
+        raise ExportError(f"{label} isn't a .zip or .json file. {HOW_TO}")
 
 
 def parse_export(files: list[tuple[str, bytes]]):
     """Returns (plays, playlist_tracks, has_extended)."""
-    plays, playlist_tracks, has_extended = [], [], False
+    out = {"plays": [], "playlist_tracks": [], "extended": False}
     for fname, raw in files:
         for name, content in _iter_json_files(fname, raw):
             try:
                 obj = json.loads(content)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
-            lname = name.lower()
-            if lname.startswith("playlist") and isinstance(obj, dict):
-                playlist_tracks += _parse_playlists(obj)
-            elif isinstance(obj, list) and obj and isinstance(obj[0], dict):
-                if "ts" in obj[0]:
-                    has_extended = True
-                    plays += _parse_extended(obj)
-                elif "endTime" in obj[0]:
-                    plays += _parse_basic(obj)
-    return plays, playlist_tracks, has_extended
+            try:
+                _parse_one(name, obj, out)
+            except (KeyError, ValueError, TypeError, AttributeError):
+                raise ExportError(f"{name} doesn't look like Spotify listening history in a format we can read. {HOW_TO}")
+    return out["plays"], out["playlist_tracks"], out["extended"]
+
+
+def _parse_one(name, obj, out):
+    lname = name.lower()
+    if lname.startswith("playlist") and isinstance(obj, dict):
+        out["playlist_tracks"] += _parse_playlists(obj)
+    elif isinstance(obj, list) and obj and isinstance(obj[0], dict):
+        if "ts" in obj[0]:
+            out["extended"] = True
+            out["plays"] += _parse_extended(obj)
+        elif "endTime" in obj[0]:
+            out["plays"] += _parse_basic(obj)
 
 
 def _play(dt, track, artist, album, uri, ms, skipped):
